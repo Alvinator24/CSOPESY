@@ -19,7 +19,7 @@ void printHeader() {
     std::cout << "| |____ ____) | |__| | |    | |____ ____) |  | |   \n";
     std::cout << " \\_____|_____/ \\____/|_|    |______|_____/   |_|   \n";
     std::cout << "Welcome to the Command-Line Operating System!\n";
-    std::cout << "Type 'exit' to quit, 'clear' to clear the screen, 'help' for commands.\n"; // Added help hint
+    std::cout << "Type 'exit' to quit, 'clear' to clear the screen, 'help' for commands.\n";
 }
 
 struct CommandArgs {
@@ -99,6 +99,7 @@ private:
     }
 
     void runScreenSession(ScreenInfo& screen_ref) { // Pass by reference to update
+        std::system("cls");
         bool screen_running = true;
         std::cout << "Attached to screen '" << screen_ref.name << "'.\n";
 
@@ -132,6 +133,10 @@ private:
             }
         }
         std::cout << "Detaching from screen '" << screen_ref.name << "'.\n";
+
+        std::system("cls");
+
+        printHeader();
     }
 
 public:
