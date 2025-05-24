@@ -243,7 +243,7 @@ public:
 
 class SchedulerTestCommand : public ICommand {
 public:
-    void execute(const std::vector<std::string>& args) override {
+    void execute([[maybe_unused]] const std::vector<std::string>& args) override {
         std::cout << "'scheduler-test' command recognized. Doing something.\n";
         // Add logic here if needed
     }
@@ -255,7 +255,7 @@ public:
 
 class SchedulerStopCommand : public ICommand {
 public:
-    void execute(const std::vector<std::string>& args) override {
+    void execute([[maybe_unused]] const std::vector<std::string>& args) override {
         std::cout << "'scheduler-stop' command recognized. Doing something.\n";
         // Add logic here if needed
     }
@@ -267,7 +267,7 @@ public:
 
 class ReportUtilCommand : public ICommand {
 public:
-    void execute(const std::vector<std::string>& args) override {
+    void execute([[maybe_unused]] const std::vector<std::string>& args) override {
         std::cout << "'report-util' command recognized. Doing something.\n";
         // Add logic here if needed
     }
