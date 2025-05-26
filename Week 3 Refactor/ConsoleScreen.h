@@ -13,7 +13,7 @@ protected:
 public:
     virtual ~ConsoleScreen() = default;
     
-    void addline(const std::string &input);
+    void addLine(const std::string &input);
     
     void displayBuffer() const;
 

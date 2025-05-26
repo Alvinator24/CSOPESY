@@ -1,7 +1,7 @@
 #include "ConsoleScreen.h"
 #include <iostream>
 
-void ConsoleScreen::addline(const std::string &input) {
+void ConsoleScreen::addLine(const std::string &input) {
     buffer.push_back(input);
 }
 
