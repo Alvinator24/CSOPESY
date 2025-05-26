@@ -1,12 +1,10 @@
 #ifndef CONSOLE_SCREEN_H
-#defien CONSOLE_SCREEN_H
+#define CONSOLE_SCREEN_H
 
 #include <vector>
 #include <string>
 #include <iostream>
-#include <memory>
 
-//class ConsoleManager;
 
 class ConsoleScreen {
 protected:
@@ -20,4 +18,8 @@ public:
     void displayBuffer() const;
 
     void clearBuffer();
-}
+
+    virtual void onEnter();
+};
+
+#endif
