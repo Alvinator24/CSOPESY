@@ -1,3 +1,5 @@
+#define _CRT_SECURE_NO_WARNINGS
+
 #include <iostream>
 #include <string>
 #include <vector>
@@ -33,15 +35,15 @@ public:
         CommandArgs result;
         std::istringstream iss(input);
         std::string token;
-        
-        if (!(iss >> result.command)) { 
-            return result; 
+
+        if (!(iss >> result.command)) {
+            return result;
         }
-        
+
         while (iss >> token) {
             result.args.push_back(token);
         }
-        
+
         return result;
     }
 };
@@ -55,21 +57,21 @@ public:
 
 class ArgParser {
 private:
-    std::vector<std::string> args_copy; 
+    std::vector<std::string> args_copy;
 
 public:
     ArgParser(const std::vector<std::string>& args) : args_copy(args) {}
-    
+
     bool hasFlag(const std::string& flag) const {
         return std::find(args_copy.begin(), args_copy.end(), flag) != args_copy.end();
     }
-    
+
     std::optional<std::string> getValueForFlag(const std::string& flag) const {
         auto it = std::find(args_copy.begin(), args_copy.end(), flag);
         if (it != args_copy.end() && std::next(it) != args_copy.end()) {
             // Ensure the next token is not another flag (basic check)
             if (std::next(it)->rfind('-', 0) != 0) {
-                 return *std::next(it);
+                return *std::next(it);
             }
         }
         return std::nullopt;
@@ -83,7 +85,6 @@ private:
         std::string createdAt;
         int currentLine;
         int totalLines;
-        // Add other screen-specific data here if needed
     };
 
     // Static members to hold state across command calls
@@ -94,7 +95,8 @@ private:
         auto now = std::chrono::system_clock::now();
         auto in_time_t = std::chrono::system_clock::to_time_t(now);
         std::stringstream ss;
-        ss << std::put_time(std::localtime(&in_time_t), "%Y-%m-%d %X");
+        std::tm* time_info = std::localtime(&in_time_t);
+        ss << std::put_time(time_info, "%Y-%m-%d %X");
         return ss.str();
     }
 
@@ -114,7 +116,7 @@ private:
             std::string screen_input_line;
             std::getline(std::cin, screen_input_line);
 
-            if (std::cin.eof()){ // Handle Ctrl+D as exit
+            if (std::cin.eof()) { // Handle Ctrl+D as exit
                 std::cout << "Detaching due to EOF...\n";
                 screen_running = false;
                 break;
@@ -122,7 +124,8 @@ private:
 
             if (screen_input_line == "exit") {
                 screen_running = false;
-            } else if (screen_input_line.empty()) {
+            }
+            else if (screen_input_line.empty()) {
                 // Just show prompt again
             }
             else {
@@ -143,76 +146,95 @@ public:
     void execute(const std::vector<std::string>& args) override {
         ArgParser parser(args);
 
+        // check if already in screen session
         if (currently_attached_screen_name.has_value()) {
             std::cout << "Error: You are already in screen session '" << *currently_attached_screen_name << "'.\n";
             std::cout << "Type 'exit' within that screen session to return to the main CLI first.\n";
             return;
         }
 
+        // starting a new screen session
         if (parser.hasFlag("-s")) {
-            auto nameOpt = parser.getValueForFlag("-s");
-            if (!nameOpt || nameOpt->empty()) {
+            auto screenNameOpt = parser.getValueForFlag("-s");
+
+            // check if no screen name given
+            if (!screenNameOpt || screenNameOpt->empty()) {
                 std::cout << "Error: -s flag requires a screen name.\nUsage: screen -s <screen_name>\n";
                 return;
             }
-            std::string name = *nameOpt;
-            if (active_screens.count(name)) {
-                std::cout << "Error: Screen with name '" << name << "' already exists.\n";
-                std::cout << "Use 'screen -r " << name << "' to reattach or choose a different name.\n";
+
+            // check if screen name already exists
+            if (active_screens.count(*screenNameOpt)) {
+                std::cout << "Error: Screen with name '" << *screenNameOpt << "' already exists.\n";
+                std::cout << "Use 'screen -r " << *screenNameOpt << "' to reattach or choose a different name.\n";
                 return;
             }
-            
+
+            // create new screen
             ScreenInfo new_screen;
-            new_screen.name = name;
+            new_screen.name = *screenNameOpt;
             new_screen.createdAt = getCurrentTimestamp();
             new_screen.currentLine = 1;
             new_screen.totalLines = 100; // Dummy total lines
-            active_screens[name] = new_screen;
-            
-            std::cout << "Screen '" << name << "' created.\n";
-            
-            currently_attached_screen_name = name;
-            runScreenSession(active_screens.at(name)); // Pass by reference
+            active_screens[*screenNameOpt] = new_screen;
+
+            std::cout << "Screen '" << *screenNameOpt << "' created.\n";
+
+            currently_attached_screen_name = *screenNameOpt;
+            runScreenSession(active_screens.at(*screenNameOpt)); // Pass by reference
             currently_attached_screen_name = std::nullopt; // Detach after session ends
 
-        } else if (parser.hasFlag("-r")) {
-            auto nameOpt = parser.getValueForFlag("-r");
-            if (!nameOpt || nameOpt->empty()) {
+        }
+        // returning to an existing screen session
+        else if (parser.hasFlag("-r")) {
+            auto screenNameOpt = parser.getValueForFlag("-r");
+
+            // check if no screen name given
+            if (!screenNameOpt || screenNameOpt->empty()) {
                 std::cout << "Error: -r flag requires a screen name.\nUsage: screen -r <screen_name>\n";
                 return;
             }
-            std::string name = *nameOpt;
-            auto it = active_screens.find(name);
+
+            // check if screen name exists
+            auto it = active_screens.find(*screenNameOpt);
+
+            // if screen name not found
             if (it == active_screens.end()) {
-                std::cout << "Error: Screen with name '" << name << "' not found.\n";
-                std::cout << "Use 'screen -ls' to see available screens or 'screen -s " << name << "' to create it.\n";
+                std::cout << "Error: Screen with name '" << *screenNameOpt << "' not found.\n";
+                std::cout << "Use 'screen -ls' to see available screens or 'screen -s " << *screenNameOpt << "' to create it.\n";
                 return;
             }
 
-            currently_attached_screen_name = name;
+            // else, attach the found screen
+            currently_attached_screen_name = *screenNameOpt;
             runScreenSession(it->second); // Pass by reference
             currently_attached_screen_name = std::nullopt; // Detach after session ends
 
-        } else if (parser.hasFlag("-ls")) {
+        }
+        // list all screen sessions
+        else if (parser.hasFlag("-ls")) {
             if (active_screens.empty()) {
                 std::cout << "No active screens.\n";
-            } else {
+            }
+            else {
                 std::cout << "Available screens:\n";
                 for (const auto& pair : active_screens) {
-                    std::cout << "  - " << pair.first 
-                              << " (Created: " << pair.second.createdAt 
-                              << ", Lines: " << pair.second.currentLine << "/" << pair.second.totalLines << ")\n";
+                    std::cout << "  - " << pair.first
+                        << " (Created: " << pair.second.createdAt
+                        << ", Lines: " << pair.second.currentLine << "/" << pair.second.totalLines << ")\n";
                 }
             }
-        } else {
+        }
+        // print general help if no command
+        else {
             std::cout << getHelp() << std::endl;
         }
     }
 
     std::string getHelp() const override {
         return "screen -s <name>         : Create and attach to a new screen session.\n"
-               "       screen -r <name>         : Reattach to an existing screen session.\n"
-               "       screen -ls             : List all active screen sessions.";
+            "       screen -r <name>         : Reattach to an existing screen session.\n"
+            "       screen -ls             : List all active screen sessions.";
     }
 };
 
@@ -228,13 +250,16 @@ public:
         ArgParser parser(args);
         if (parser.hasFlag("--system")) {
             std::cout << "  System-wide initialization sequence started.\n";
-        } else if (auto module = parser.getValueForFlag("--module")) {
+        }
+        else if (auto module = parser.getValueForFlag("--module")) {
             std::cout << "  Initializing module: " << module.value() << "\n";
-        } else if (args.empty()){
+        }
+        else if (args.empty()) {
             // std::cout << "  Use 'initialize --system' or 'initialize --module <name>'.\n";
-        } else {
+        }
+        else {
             std::cout << "  Unrecognized initialization parameters: ";
-            for(const auto& arg : args) {
+            for (const auto& arg : args) {
                 std::cout << arg << " ";
             }
             std::cout << "\n  Hint: Try 'initialize --system' or 'initialize --module <name>'.\n";
@@ -293,7 +318,7 @@ public:
     void registerCommand(const std::string& name, std::unique_ptr<ICommand> command) {
         commands[name] = std::move(command);
     }
-    
+
     bool executeCommand(const std::string& name, const std::vector<std::string>& args) {
         auto it = commands.find(name);
         if (it != commands.end()) {
@@ -316,7 +341,7 @@ public:
         for (const auto& pair : commands) {
             command_names.push_back(pair.first);
         }
-        std::sort(command_names.begin(), command_names.end()); 
+        std::sort(command_names.begin(), command_names.end());
         return command_names;
     }
 };
@@ -338,29 +363,31 @@ public:
 
     void run() {
         printHeader();
-        
+
         while (running) {
             std::cout << "Enter a command: ";
             std::string input_line;
             std::getline(std::cin, input_line);
 
-            if (std::cin.eof()){ // Handle Ctrl+D as exit for main CLI
+            if (std::cin.eof()) { // Handle Ctrl+D as exit for main CLI
                 std::cout << "Exiting due to EOF...\n";
                 running = false;
                 break;
             }
-            
+
             CommandArgs parsed = CommandParser::parse(input_line);
-            
-            if (parsed.command.empty()) { 
+
+            if (parsed.command.empty()) {
                 continue;
             }
 
             if (parsed.command == "exit") {
                 running = false;
-            } else if (parsed.command == "clear") {
+            }
+            else if (parsed.command == "clear") {
                 clearScreen();
-            } else if (parsed.command == "help") { 
+            }
+            else if (parsed.command == "help") {
                 handleHelp(parsed.args);
             }
             else {
@@ -391,30 +418,36 @@ private:
                     std::istringstream iss(help_text);
                     std::string line;
                     bool first_line = true;
-                    while(std::getline(iss, line)) {
+                    while (std::getline(iss, line)) {
                         if (first_line) {
-                             std::cout << " - " << line << "\n";
-                             first_line = false;
-                        } else {
+                            std::cout << " - " << line << "\n";
+                            first_line = false;
+                        }
+                        else {
                             std::cout << "    " << line << "\n"; // Indent subsequent lines
                         }
                     }
-                } else {
+                }
+                else {
                     std::cout << "\n";
                 }
             }
             std::cout << "  help [command_name] - Display help for a specific command.\n";
             std::cout << "  clear               - Clears the screen.\n";
             std::cout << "  exit                - Exits the application.\n";
-        } else {
+        }
+        else {
             const std::string& cmd_to_help = args[0];
             if (auto help_text_opt = registry.getCommandHelp(cmd_to_help)) {
-                 std::cout << *help_text_opt << "\n";
-            } else if (cmd_to_help == "exit") {
+                std::cout << *help_text_opt << "\n";
+            }
+            else if (cmd_to_help == "exit") {
                 std::cout << "exit - Exits the application.\n";
-            } else if (cmd_to_help == "clear") {
+            }
+            else if (cmd_to_help == "clear") {
                 std::cout << "clear - Clears the screen and reprints the header.\n";
-            } else if (cmd_to_help == "help") {
+            }
+            else if (cmd_to_help == "help") {
                 std::cout << "help [command_name] - Displays this help message or help for a specific command.\n";
             }
             else {
