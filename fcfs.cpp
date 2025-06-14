@@ -1,3 +1,4 @@
+#define _CRT_SECURE_NO_WARNINGS
 #include <iostream>
 #include <vector>
 #include <string>
@@ -26,7 +27,7 @@ public:
     std::vector<std::string> printCommands;
     std::string logFileName;
 
-    Process(int id, const std::string& n, int totalInst, const std::vector<std::string>& prints): pid(id), name(n), totalInstructions(totalInst), executedInstructions(0), state(READY), printCommands(prints) {
+    Process(int id, const std::string& n, int totalInst, const std::vector<std::string>& prints) : pid(id), name(n), totalInstructions(totalInst), executedInstructions(0), state(READY), printCommands(prints) {
         arrivalTime = std::chrono::system_clock::now();
         logFileName = "process_logs/" + name + "_log.txt";
     }
@@ -44,7 +45,8 @@ public:
 
             outFile << timestamp << "\tCore: " << coreId << " \"" << message << "\"" << std::endl;
             outFile.close();
-        } else {
+        }
+        else {
             std::cerr << "Error: Could not open log file for " << name << ": " << logFileName << std::endl;
         }
     }
@@ -97,7 +99,7 @@ private:
     void schedulerLoop() {
         while (running.load()) {
             std::unique_lock<std::mutex> lock(queueMutex);
-            schedulerCv.wait(lock, [this]{ return !processQueue.empty() || !running.load(); });
+            schedulerCv.wait(lock, [this] { return !processQueue.empty() || !running.load(); });
 
             if (!running.load() && processQueue.empty()) {
                 break;
@@ -116,7 +118,8 @@ private:
                         coreLock.unlock();
                         coreCvs[i].notify_one();
                     }
-                } else {
+                }
+                else {
                     break;
                 }
             }
@@ -129,7 +132,7 @@ private:
             std::shared_ptr<Process> currentProcess;
             {
                 std::unique_lock<std::mutex> lock(coreMutex);
-                coreCvs[coreId].wait(lock, [this, coreId]{ return coreBusy[coreId] || !running.load(); });
+                coreCvs[coreId].wait(lock, [this, coreId] { return coreBusy[coreId] || !running.load(); });
                 if (!running.load() && !coreBusy[coreId]) {
                     break;
                 }
@@ -139,7 +142,7 @@ private:
             if (currentProcess) {
                 while (currentProcess->executedInstructions < currentProcess->totalInstructions && running.load()) {
                     currentProcess->executeNextInstruction(coreId);
-                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 }
 
                 {
@@ -159,7 +162,8 @@ public:
             if (!std::filesystem::exists("process_logs")) {
                 std::filesystem::create_directory("process_logs");
             }
-        } catch (const std::filesystem::filesystem_error& e) {
+        }
+        catch (const std::filesystem::filesystem_error& e) {
             std::cerr << "Error creating directory 'process_logs': " << e.what() << std::endl;
         }
     }
@@ -174,7 +178,7 @@ public:
     }
 
     void start() {
-        running.store(true); 
+        running.store(true);
         schedulerThread = std::thread(&Scheduler::schedulerLoop, this);
         for (int i = 0; i < NUM_CORES; ++i) {
             coreBusy[i] = false;
@@ -226,7 +230,7 @@ public:
             int coreIdx = -1;
             {
                 std::lock_guard<std::mutex> coreLock(coreMutex);
-                for(int i = 0; i < NUM_CORES; ++i) {
+                for (int i = 0; i < NUM_CORES; ++i) {
                     if (runningProcesses[i] == p) {
                         coreIdx = i;
                         break;
@@ -275,7 +279,7 @@ std::vector<std::string> generatePrintCommands(const std::string& processName, i
     std::vector<std::string> commands;
     commands.reserve(count);
     for (int i = 0; i < count; ++i) {
-        commands.push_back("Hello world from " + processName + "!");
+        commands.push_back("Hello world from screen_01!");
     }
     return commands;
 }
@@ -300,15 +304,15 @@ int main() {
         if (command == "screen -ls") {
             scheduler.printScreenLs();
         }
-        
+
         if (command == "exit") {
             break;
         }
 
-        if (scheduler.allProcessesFinished()) {
+        /*if (scheduler.allProcessesFinished()) {
             std::cout << "\nAll processes have finished." << std::endl;
             break;
-        }
+        }*/
     }
 
     scheduler.stop();
