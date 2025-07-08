@@ -1,21 +1,44 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <fstream>
 #include <sstream>
-#include <unordered_map>
+#include <chrono>
+#include <thread>
 #include <memory>
-#include <optional>
-#include <algorithm> // For std::find
-#include <cstdlib>   // For system()
-#include <chrono>    // For std::chrono
-#include <iomanip>   // For std::put_time
-#include <ctime>     // For std::localtime
+#include <algorithm>
+#include <iomanip>
+#include <ctime>
+#include <atomic>
+#include "process.h"
+#include "cpu.h"
+#include "scheduler.h"
+#include "config.h"
 
-// Removed: #include "CommandRegistry.hpp" (already defined below)
-// Removed: #include "Commands/ScreenCommand.hpp" (will be defined below)
-// Removed: #include "Commands/InitializeCommand.hpp" (will be defined below)
+// Global variables
+std::unique_ptr<CPU> cpu;
+std::unique_ptr<Scheduler> scheduler;
+std::unique_ptr<Config> config;
+bool system_initialized = false;
+bool scheduler_running = false;
+std::vector<std::unique_ptr<Process>> processes;
+int next_process_id = 1;
 
-void printHeader() {
+// Function declarations
+void initialize_system();
+void scheduler_start();
+void scheduler_stop();
+void screen_ls();
+void screen_s(const std::string& process_name);
+void process_smi(const std::string& process_name);
+void report_util();
+void process_command(const std::string& command);
+void create_process(const std::string& name);
+void attach_to_screen(Process* target_process);
+
+int main() {
+    srand(static_cast<unsigned int>(time(nullptr)));
+
     std::cout << "  _____  _____  ____  _____  ______  _______     __\n";
     std::cout << " / ____|/ ____|/ __ \\|  __ \\|  ____|/ ____\\ \\   / /\n";
     std::cout << "| |    | (___ | |  | | |__) | |__  | (___  \\ \\_/ / \n";
@@ -23,374 +46,311 @@ void printHeader() {
     std::cout << "| |____ ____) | |__| | |    | |____ ____) |  | |   \n";
     std::cout << " \\_____|_____/ \\____/|_|    |______|_____/   |_|   \n";
     std::cout << "Welcome to the Command-Line Operating System!\n";
-    std::cout << "Type 'exit' to quit, 'clear' to clear the screen, 'help' for commands.\n"; // Added help hint
+    std::cout << "Type 'exit' to quit, 'clear' to clear the screen, 'help' for commands.\n";
+
+    std::string command;
+    while (true) {
+        std::cout << "root:\\> ";
+        std::getline(std::cin, command);
+
+        if (command == "exit") {
+            std::cout << "Exiting CSOPESY Emulator..." << std::endl;
+            break;
+        }
+
+        process_command(command);
+    }
+
+    return 0;
 }
 
-struct CommandArgs {
+void initialize_system() {
+    std::ifstream config_file("config.txt");
+    if (!config_file.is_open()) {
+        std::cout << "Error: config.txt not found. Creating default configuration..." << std::endl;
+        config = std::make_unique<Config>();
+
+        // Create default config file
+        std::ofstream default_config("config.txt");
+        default_config << "num-cpu: 2\n";
+        default_config << "scheduler: fcfs\n";
+        default_config << "quantum-cycles: 10\n";
+        default_config << "batch-process-freq: 5\n";
+        default_config << "min-ins: 5\n";
+        default_config << "max-ins: 15\n";
+        default_config << "delay-per-exec: 100\n";
+        default_config.close();
+    }
+    else {
+        config = std::make_unique<Config>();
+        std::string line;
+        while (std::getline(config_file, line)) {
+            std::istringstream iss(line);
+            std::string key, value;
+            if (std::getline(iss, key, ':') && std::getline(iss, value)) {
+                // Remove leading/trailing whitespace
+                key.erase(0, key.find_first_not_of(" \t"));
+                key.erase(key.find_last_not_of(" \t") + 1);
+                value.erase(0, value.find_first_not_of(" \t"));
+                value.erase(value.find_last_not_of(" \t") + 1);
+
+                if (key == "num-cpu") config->num_cpu = std::stoi(value);
+                else if (key == "scheduler") config->scheduler_type = value;
+                else if (key == "quantum-cycles") config->quantum_cycles = std::stoi(value);
+                else if (key == "batch-process-freq") config->batch_process_freq = std::stoi(value);
+                else if (key == "min-ins") config->min_instructions = std::stoi(value);
+                else if (key == "max-ins") config->max_instructions = std::stoi(value);
+                else if (key == "delay-per-exec") config->delay_per_exec = std::stoi(value);
+            }
+        }
+        config_file.close();
+    }
+
+    cpu = std::make_unique<CPU>(config->num_cpu);
+    scheduler = std::make_unique<Scheduler>(config->scheduler_type, config->quantum_cycles);
+    system_initialized = true;
+
+    std::cout << "System initialized successfully!" << std::endl;
+    std::cout << "num-cpu: " << config->num_cpu << std::endl;
+    std::cout << "scheduler: " << config->scheduler_type << std::endl;
+    std::cout << "quantum-cycles: " << config->quantum_cycles << std::endl;
+    std::cout << "batch-process-freq: " << config->batch_process_freq << std::endl;
+    std::cout << "min-ins: " << config->min_instructions << std::endl;
+    std::cout << "max-ins: " << config->max_instructions << std::endl;
+    std::cout << "delay-per-exec: " << config->delay_per_exec << std::endl;
+}
+
+void scheduler_start() {
+    if (!system_initialized) {
+        std::cout << "Error: System not initialized. Use 'initialize' first." << std::endl;
+        return;
+    }
+    if (!config || !cpu || !scheduler) {
+        std::cout << "Error: System components not properly initialized." << std::endl;
+        return;
+    }
+
+    static std::atomic<bool> simulation_active(false);
+
+    if (simulation_active.load()) {
+        std::cout << "Process generation has been re-enabled." << std::endl;
+        scheduler_running = true;
+        return;
+    }
+
+    scheduler_running = true;
+    std::cout << "Scheduler started. Processes will be generated and executed." << std::endl;
+
+    std::thread([&]() {
+        simulation_active = true;
+        int tick_count = 0;
+
+        while (scheduler_running || scheduler->has_pending_processes() || cpu->get_utilization() > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(config->delay_per_exec));
+            tick_count++;
+
+            if (scheduler_running && (tick_count % config->batch_process_freq == 0)) {
+                std::ostringstream oss;
+                oss << "p" << std::setw(2) << std::setfill('0') << next_process_id;
+                std::string process_name = oss.str();
+                create_process(process_name);
+                next_process_id++;
+            }
+
+            while (cpu->can_run_process()) {
+                Process* next_process = scheduler->get_next_process();
+                if (next_process) {
+                    cpu->add_process(next_process);
+                }
+                else {
+                    // No more processes in the ready queue to schedule for now.
+                    break;
+                }
+            }
+
+            cpu->tick();
+            cpu->execute_processes();
+        }
+        simulation_active = false;
+        std::cout << "\nAll processes have finished. Simulation has stopped." << std::endl;
+        std::cout << "root:\\> " << std::flush;
+        }).detach();
+}
+
+void scheduler_stop() {
+    scheduler_running = false;
+    std::cout << "Scheduler stopped. Processes will no longer be generated." << std::endl;
+}
+
+void screen_ls() {
+    if (!system_initialized) {
+        std::cout << "Error: System not initialized. Use 'initialize' first." << std::endl;
+        return;
+    }
+
+    scheduler->display_status("screen -ls Detected");
+}
+
+void attach_to_screen(Process* target_process) {
+    if (!target_process) {
+        return;
+    }
+    system("cls");
+    std::cout << "\n=== Process Screen: " << target_process->name << " ===" << std::endl;
+    std::cout << "Type 'process-smi' to view process status" << std::endl;
+    std::cout << "Type 'exit' to return to main menu" << std::endl;
+
     std::string command;
-    std::vector<std::string> args;
-};
+    while (true) {
+        std::cout << target_process->name << ":\\> ";
+        std::getline(std::cin, command);
 
-class CommandParser {
-public:
-    static CommandArgs parse(const std::string& input) {
-        CommandArgs result;
-        std::istringstream iss(input);
-        std::string token;
-        
-        if (!(iss >> result.command)) { 
-            return result; 
+        if (command == "exit") {
+            break;
         }
-        
-        while (iss >> token) {
-            result.args.push_back(token);
+        else if (command == "process-smi") {
+            process_smi(target_process->name);
         }
-        
-        return result;
-    }
-};
-
-class ICommand {
-public:
-    virtual ~ICommand() = default;
-    virtual void execute(const std::vector<std::string>& args) = 0;
-    virtual std::string getHelp() const = 0;
-};
-
-class ArgParser {
-private:
-    std::vector<std::string> args_copy; 
-
-public:
-    ArgParser(const std::vector<std::string>& args) : args_copy(args) {}
-    
-    bool hasFlag(const std::string& flag) const {
-        return std::find(args_copy.begin(), args_copy.end(), flag) != args_copy.end();
-    }
-    
-    std::optional<std::string> getValueForFlag(const std::string& flag) const {
-        auto it = std::find(args_copy.begin(), args_copy.end(), flag);
-        if (it != args_copy.end() && std::next(it) != args_copy.end()) {
-            // Ensure the next token is not another flag (basic check)
-            if (std::next(it)->rfind('-', 0) != 0) {
-                 return *std::next(it);
-            }
+        else {
+            std::cout << "Unknown command. Available commands: process-smi, exit" << std::endl;
         }
-        return std::nullopt;
     }
-};
+}
 
-// --- Define Commands that were previously in separate .hpp/.cpp files ---
-
-class ScreenCommand : public ICommand {
-private:
-    struct ScreenInfo {
-        std::string name;
-        std::string createdAt;
-        int currentLine;
-        int totalLines;
-        // Add other screen-specific data here if needed
-    };
-
-    // Static members to hold state across command calls
-    static std::unordered_map<std::string, ScreenInfo> active_screens;
-    static std::optional<std::string> currently_attached_screen_name;
-
-    static std::string getCurrentTimestamp() {
-        auto now = std::chrono::system_clock::now();
-        auto in_time_t = std::chrono::system_clock::to_time_t(now);
-        std::stringstream ss;
-        ss << std::put_time(std::localtime(&in_time_t), "%Y-%m-%d %X");
-        return ss.str();
+void screen_s(const std::string& process_name) {
+    if (!system_initialized) {
+        std::cout << "Error: System not initialized. Use 'initialize' first." << std::endl;
+        return;
     }
 
-    void runScreenSession(ScreenInfo& screen_ref) { // Pass by reference to update
-        bool screen_running = true;
-        std::cout << "Attached to screen '" << screen_ref.name << "'.\n";
-
-        while (screen_running) {
-            std::cout << "\n[SCREEN: " << screen_ref.name << "]\n";
-            std::cout << "Process Name: " << screen_ref.name << "_process (dummy)\n";
-            std::cout << "Instruction: Line " << screen_ref.currentLine << " / " << screen_ref.totalLines << "\n";
-            std::cout << "Created At: " << screen_ref.createdAt << "\n";
-            std::cout << "Type 'exit' to detach and return to main menu.\n";
-            std::cout << "[" << screen_ref.name << "]$ "; // Screen-specific prompt
-
-            std::string screen_input_line;
-            std::getline(std::cin, screen_input_line);
-
-            if (std::cin.eof()){ // Handle Ctrl+D as exit
-                std::cout << "Detaching due to EOF...\n";
-                screen_running = false;
-                break;
-            }
-
-            if (screen_input_line == "exit") {
-                screen_running = false;
-            } else if (screen_input_line.empty()) {
-                // Just show prompt again
-            }
-            else {
-                std::cout << "  Screen '" << screen_ref.name << "' processing: '" << screen_input_line << "'\n";
-                // Simulate work by advancing the line
-                screen_ref.currentLine = (screen_ref.currentLine % screen_ref.totalLines) + 1;
-                std::cout << "  (Work simulated, line advanced)\n";
-            }
-        }
-        std::cout << "Detaching from screen '" << screen_ref.name << "'.\n";
-    }
-
-public:
-    void execute(const std::vector<std::string>& args) override {
-        ArgParser parser(args);
-
-        if (currently_attached_screen_name.has_value()) {
-            std::cout << "Error: You are already in screen session '" << *currently_attached_screen_name << "'.\n";
-            std::cout << "Type 'exit' within that screen session to return to the main CLI first.\n";
+    // Check if a process with the same name already exists
+    for (const auto& process : processes) {
+        if (process->name == process_name) {
+            std::cout << "Error: Process with name '" << process_name << "' already exists. Use 'screen -r <name>' to attach." << std::endl;
             return;
         }
+    }
 
-        if (parser.hasFlag("-s")) {
-            auto nameOpt = parser.getValueForFlag("-s");
-            if (!nameOpt || nameOpt->empty()) {
-                std::cout << "Error: -s flag requires a screen name.\nUsage: screen -s <screen_name>\n";
-                return;
-            }
-            std::string name = *nameOpt;
-            if (active_screens.count(name)) {
-                std::cout << "Error: Screen with name '" << name << "' already exists.\n";
-                std::cout << "Use 'screen -r " << name << "' to reattach or choose a different name.\n";
-                return;
-            }
-            
-            ScreenInfo new_screen;
-            new_screen.name = name;
-            new_screen.createdAt = getCurrentTimestamp();
-            new_screen.currentLine = 1;
-            new_screen.totalLines = 100; // Dummy total lines
-            active_screens[name] = new_screen;
-            
-            std::cout << "Screen '" << name << "' created.\n";
-            
-            currently_attached_screen_name = name;
-            runScreenSession(active_screens.at(name)); // Pass by reference
-            currently_attached_screen_name = std::nullopt; // Detach after session ends
+    // If the name is unique, create the new process
+    create_process(process_name);
+    std::cout << "Process '" << process_name << "' created successfully." << std::endl;
 
-        } else if (parser.hasFlag("-r")) {
-            auto nameOpt = parser.getValueForFlag("-r");
-            if (!nameOpt || nameOpt->empty()) {
-                std::cout << "Error: -r flag requires a screen name.\nUsage: screen -r <screen_name>\n";
-                return;
-            }
-            std::string name = *nameOpt;
-            auto it = active_screens.find(name);
-            if (it == active_screens.end()) {
-                std::cout << "Error: Screen with name '" << name << "' not found.\n";
-                std::cout << "Use 'screen -ls' to see available screens or 'screen -s " << name << "' to create it.\n";
-                return;
-            }
+    // Attach to the newly created process's screen
+    Process* new_process = processes.back().get();
+    attach_to_screen(new_process);
+}
 
-            currently_attached_screen_name = name;
-            runScreenSession(it->second); // Pass by reference
-            currently_attached_screen_name = std::nullopt; // Detach after session ends
+void process_smi(const std::string& process_name) {
+    for (auto& process : processes) {
+        if (process->name == process_name) {
+            process->display_status();
+            return;
+        }
+    }
+    std::cout << "Process not found: " << process_name << std::endl;
+}
 
-        } else if (parser.hasFlag("-ls")) {
-            if (active_screens.empty()) {
-                std::cout << "No active screens.\n";
-            } else {
-                std::cout << "Available screens:\n";
-                for (const auto& pair : active_screens) {
-                    std::cout << "  - " << pair.first 
-                              << " (Created: " << pair.second.createdAt 
-                              << ", Lines: " << pair.second.currentLine << "/" << pair.second.totalLines << ")\n";
+void report_util() {
+    if (!system_initialized) {
+        std::cout << "Error: System not initialized. Use 'initialize' first." << std::endl;
+        return;
+    }
+
+    std::ofstream log_file("csopesy-log.txt");
+    if (log_file.is_open()) {
+        // Redirect cout to file temporarily
+        std::streambuf* cout_buffer = std::cout.rdbuf();
+        std::cout.rdbuf(log_file.rdbuf());
+
+        scheduler->display_status("report-util generated");
+
+        // Restore cout
+        std::cout.rdbuf(cout_buffer);
+        log_file.close();
+
+        std::cout << "Report saved to csopesy-log.txt" << std::endl;
+    }
+    else {
+        std::cout << "Error: Could not create log file." << std::endl;
+    }
+}
+
+void create_process(const std::string& name) {
+    auto new_process = std::make_unique<Process>(name, next_process_id++);
+    new_process->arrival_time = cpu->get_current_time();
+    processes.push_back(std::move(new_process));
+
+    // Add to scheduler's ready queue
+    scheduler->add_process(processes.back().get());
+}
+
+void process_command(const std::string& command) {
+    std::istringstream iss(command);
+    std::string cmd;
+    iss >> cmd;
+
+    if (cmd == "initialize") {
+        initialize_system();
+    }
+    else if (cmd == "scheduler-start") {
+        scheduler_start();
+    }
+    else if (cmd == "scheduler-stop") {
+        scheduler_stop();
+    }
+    else if (cmd == "screen") {
+        std::string arg1, arg2;
+        iss >> arg1 >> arg2;
+        if (arg1 == "-ls") {
+            screen_ls();
+        }
+        else if (arg1 == "-s" && !arg2.empty()) {
+            screen_s(arg2);
+        }
+        else if (arg1 == "-r" && !arg2.empty()) {
+            Process* target_process = nullptr;
+            for (auto& p : processes) {
+                if (p->name == arg2) {
+                    target_process = p.get();
+                    break;
                 }
             }
-        } else {
-            std::cout << getHelp() << std::endl;
-        }
-    }
 
-    std::string getHelp() const override {
-        return "screen -s <name>         : Create and attach to a new screen session.\n"
-               "       screen -r <name>         : Reattach to an existing screen session.\n"
-               "       screen -ls             : List all active screen sessions.";
-    }
-};
-
-// Define static members of ScreenCommand
-std::unordered_map<std::string, ScreenCommand::ScreenInfo> ScreenCommand::active_screens;
-std::optional<std::string> ScreenCommand::currently_attached_screen_name;
-
-
-class InitializeCommand : public ICommand {
-public:
-    void execute(const std::vector<std::string>& args) override {
-        std::cout << "InitializeCommand executed.\n";
-        ArgParser parser(args);
-        if (parser.hasFlag("--system")) {
-            std::cout << "  System-wide initialization sequence started.\n";
-        } else if (auto module = parser.getValueForFlag("--module")) {
-            std::cout << "  Initializing module: " << module.value() << "\n";
-        } else if (args.empty()){
-            std::cout << "  Use 'initialize --system' or 'initialize --module <name>'.\n";
-        } else {
-            std::cout << "  Unrecognized initialization parameters: ";
-            for(const auto& arg : args) {
-                std::cout << arg << " ";
-            }
-            std::cout << "\n  Hint: Try 'initialize --system' or 'initialize --module <name>'.\n";
-        }
-    }
-
-    std::string getHelp() const override {
-        return "initialize [--system | --module <name>] - Initializes system components.";
-    }
-};
-
-// --- End of Command Definitions ---
-
-
-class CommandRegistry {
-private:
-    std::unordered_map<std::string, std::unique_ptr<ICommand>> commands;
-
-public:
-    void registerCommand(const std::string& name, std::unique_ptr<ICommand> command) {
-        commands[name] = std::move(command);
-    }
-    
-    bool executeCommand(const std::string& name, const std::vector<std::string>& args) {
-        auto it = commands.find(name);
-        if (it != commands.end()) {
-            it->second->execute(args);
-            return true;
-        }
-        return false;
-    }
-
-    std::optional<std::string> getCommandHelp(const std::string& name) const {
-        auto it = commands.find(name);
-        if (it != commands.end()) {
-            return it->second->getHelp();
-        }
-        return std::nullopt;
-    }
-
-    std::vector<std::string> getAvailableCommands() const {
-        std::vector<std::string> command_names;
-        for (const auto& pair : commands) {
-            command_names.push_back(pair.first);
-        }
-        std::sort(command_names.begin(), command_names.end()); 
-        return command_names;
-    }
-};
-
-
-class CLI {
-private:
-    CommandRegistry registry;
-    bool running;
-
-public:
-    CLI() : running(true) {
-        registry.registerCommand("screen", std::make_unique<ScreenCommand>());
-        registry.registerCommand("initialize", std::make_unique<InitializeCommand>());
-    }
-
-    void run() {
-        printHeader();
-        
-        while (running) {
-            std::cout << "Enter a command: ";
-            std::string input_line;
-            std::getline(std::cin, input_line);
-
-            if (std::cin.eof()){ // Handle Ctrl+D as exit for main CLI
-                std::cout << "Exiting due to EOF...\n";
-                running = false;
-                break;
-            }
-            
-            CommandArgs parsed = CommandParser::parse(input_line);
-            
-            if (parsed.command.empty()) { 
-                continue;
-            }
-
-            if (parsed.command == "exit") {
-                running = false;
-            } else if (parsed.command == "clear") {
-                clearScreen();
-            } else if (parsed.command == "help") { 
-                handleHelp(parsed.args);
+            if (target_process) {
+                if (target_process->status != "finished") {
+                    attach_to_screen(target_process);
+                }
+                else {
+                    std::cout << "Process " << arg2 << " has already finished and cannot be re-attached." << std::endl;
+                }
             }
             else {
-                if (!registry.executeCommand(parsed.command, parsed.args)) {
-                    std::cout << "Unknown command: " << parsed.command << "\n";
-                    std::cout << "Type 'help' for a list of available commands.\n";
-                }
+                std::cout << "Process " << arg2 << " not found." << std::endl;
             }
         }
-        std::cout << "Shutting down OSIM.\n";
-    }
-
-private:
-    void clearScreen() {
-        #ifdef _WIN32
-            std::system("cls");
-        #else
-            std::system("clear");
-        #endif
-        printHeader();
-    }
-
-    void handleHelp(const std::vector<std::string>& args) {
-        if (args.empty()) {
-            std::cout << "Available commands:\n";
-            for (const auto& cmd_name : registry.getAvailableCommands()) {
-                std::cout << "  " << cmd_name;
-                if (auto help_text_opt = registry.getCommandHelp(cmd_name)) {
-                    // Simple formatting for multi-line help
-                    std::string help_text = *help_text_opt;
-                    std::istringstream iss(help_text);
-                    std::string line;
-                    bool first_line = true;
-                    while(std::getline(iss, line)) {
-                        if (first_line) {
-                             std::cout << " - " << line << "\n";
-                             first_line = false;
-                        } else {
-                            std::cout << "    " << line << "\n"; // Indent subsequent lines
-                        }
-                    }
-                } else {
-                    std::cout << "\n";
-                }
-            }
-            std::cout << "  help [command_name] - Display help for a specific command.\n";
-            std::cout << "  clear               - Clears the screen.\n";
-            std::cout << "  exit                - Exits the application.\n";
-        } else {
-            const std::string& cmd_to_help = args[0];
-            if (auto help_text_opt = registry.getCommandHelp(cmd_to_help)) {
-                 std::cout << *help_text_opt << "\n";
-            } else if (cmd_to_help == "exit") {
-                std::cout << "exit - Exits the application.\n";
-            } else if (cmd_to_help == "clear") {
-                std::cout << "clear - Clears the screen and reprints the header.\n";
-            } else if (cmd_to_help == "help") {
-                std::cout << "help [command_name] - Displays this help message or help for a specific command.\n";
-            }
-            else {
-                std::cout << "No help available for unknown command: " << cmd_to_help << "\n";
-            }
+        else {
+            std::cout << "Invalid 'screen' command. Use 'screen -ls', 'screen -s <name>', or 'screen -r <name>'." << std::endl;
         }
     }
-};
-
-int main() {
-    CLI cli;
-    cli.run();
-    return 0;
+    else if (cmd == "report-util") {
+        report_util();
+    }
+    else if (cmd == "clear") {
+        system("cls");
+    }
+    else if (cmd == "help") {
+        std::cout << "Available commands:\n";
+        std::cout << "  initialize          - Initialize the system from config.txt\n";
+        std::cout << "  scheduler-start     - Start process generation and execution\n";
+        std::cout << "  scheduler-stop      - Stop generating new processes\n";
+        std::cout << "  screen -ls          - Display system and process status\n";
+        std::cout << "  screen -s <name>    - Create and attach to a new process screen\n";
+        std::cout << "  screen -r <name>    - Re-attach to a running process screen\n";
+        std::cout << "  report-util         - Generate a CPU utilization report\n";
+        std::cout << "  clear               - Clear the console screen\n";
+        std::cout << "  exit                - Exit the emulator\n";
+    }
+    else {
+        std::cout << "Unknown command: " << command << ". Type 'help' for a list of commands." << std::endl;
+    }
 }
