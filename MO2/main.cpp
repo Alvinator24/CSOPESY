@@ -22,9 +22,13 @@ std::unique_ptr<Scheduler> scheduler;
 std::unique_ptr<Config> config;
 std::unique_ptr<MMU> mmu;
 bool system_initialized = false;
-bool scheduler_running = false;
+bool scheduler_running = false; // This now only controls automatic process generation
 std::vector<std::unique_ptr<Process>> processes;
 int next_process_id = 1;
+
+// For the main simulation loop
+std::thread simulation_thread;
+std::atomic<bool> system_shutdown(false);
 
 // Function declarations
 void initialize_system();
@@ -60,6 +64,10 @@ int main() {
 
         if (command == "exit") {
             std::cout << "Exiting CSOPESY Emulator..." << std::endl;
+            system_shutdown = true;
+            if (simulation_thread.joinable()) {
+                simulation_thread.join();
+            }
             break;
         }
 
@@ -138,56 +146,40 @@ void initialize_system() {
     std::cout << "mem-per-frame: " << config->mem_per_frame << std::endl;
     std::cout << "min-mem-per-proc: " << config->min_mem_per_proc << std::endl;
     std::cout << "max-mem-per-proc: " << config->max_mem_per_proc << std::endl;
-}
 
-void scheduler_start() {
-    if (!system_initialized) {
-        std::cout << "Error: System not initialized. Use 'initialize' first." << std::endl;
-        return;
-    }
-    if (!config || !cpu || !scheduler) {
-        std::cout << "Error: System components not properly initialized." << std::endl;
-        return;
-    }
-
-    static std::atomic<bool> simulation_active(false);
-
-    if (simulation_active.load()) {
-        std::cout << "Process generation has been re-enabled." << std::endl;
-        scheduler_running = true;
-        return;
-    }
-
-    scheduler_running = true;
-    std::cout << "Scheduler started. Processes will be generated and executed." << std::endl;
-
-    std::thread([&]() {
-        simulation_active = true;
+    // Start the main simulation thread
+    simulation_thread = std::thread([]() {
         int tick_count = 0;
-
-        while (scheduler_running || scheduler->has_pending_processes() || cpu->get_utilization() > 0) {
+        while (!system_shutdown.load()) {
+            if (!system_initialized || !config) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                continue;
+            }
+            
             std::this_thread::sleep_for(std::chrono::milliseconds(config->delay_per_exec));
             tick_count++;
 
+            // Automatic process generation (controlled by scheduler-start/stop)
             if (scheduler_running && (tick_count % config->batch_process_freq == 0)) {
                 std::ostringstream oss;
                 oss << "p" << std::setw(2) << std::setfill('0') << next_process_id;
                 std::string process_name = oss.str();
-
-                // Random memory size for scheduler-started processes
+                
                 int mem_size = config->min_mem_per_proc + (rand() % (config->max_mem_per_proc - config->min_mem_per_proc + 1));
-
-                create_process(process_name, mem_size);
-                next_process_id++;
+                
+                // Admission Control for auto-generated processes
+                if (mmu->can_admit_process(mem_size)) {
+                    create_process(process_name, mem_size);
+                    next_process_id++;
+                }
             }
 
+            // Scheduling and Execution (always running)
             while (cpu->can_run_process()) {
                 Process* next_process = scheduler->get_next_process();
                 if (next_process) {
                     cpu->add_process(next_process);
-                }
-                else {
-                    // No more processes in the ready queue to schedule for now.
+                } else {
                     break;
                 }
             }
@@ -195,15 +187,21 @@ void scheduler_start() {
             cpu->tick();
             cpu->execute_processes();
         }
-        simulation_active = false;
-        std::cout << "\nAll processes have finished. Simulation has stopped." << std::endl;
-        std::cout << "root:\\> " << std::flush;
-        }).detach();
+        });
+}
+
+void scheduler_start() {
+    if (!system_initialized) {
+        std::cout << "Error: System not initialized. Use 'initialize' first." << std::endl;
+        return;
+    }
+    scheduler_running = true;
+    std::cout << "Automatic process generation started." << std::endl;
 }
 
 void scheduler_stop() {
     scheduler_running = false;
-    std::cout << "Scheduler stopped. Processes will no longer be generated." << std::endl;
+    std::cout << "Automatic process generation stopped." << std::endl;
 }
 
 void screen_ls() {
@@ -247,12 +245,24 @@ void screen_s(const std::string& process_name, int memory_size) {
         return;
     }
 
+    // Memory size validation (Power of 2)
+    if (memory_size < 64 || memory_size > 65536 || (memory_size > 0 && (memory_size & (memory_size - 1)) != 0)) {
+        std::cout << "invalid memory allocation" << std::endl;
+        return;
+    }
+
     // Check if a process with the same name already exists
     for (const auto& process : processes) {
         if (process->name == process_name) {
             std::cout << "Error: Process with name '" << process_name << "' already exists. Use 'screen -r <name>' to attach." << std::endl;
             return;
         }
+    }
+
+    // Admission Control
+    if (!mmu->can_admit_process(memory_size)) {
+        std::cout << "Error: Not enough memory to create process '" << process_name << "'." << std::endl;
+        return;
     }
 
     // If the name is unique, create the new process
@@ -270,11 +280,23 @@ void screen_c(const std::string& process_name, int memory_size, const std::strin
         return;
     }
 
+    // Memory size validation
+    if (memory_size < 64 || memory_size > 65536 || (memory_size > 0 && (memory_size & (memory_size - 1)) != 0)) {
+        std::cout << "invalid memory allocation" << std::endl;
+        return;
+    }
+
     for (const auto& p : processes) {
         if (p->name == process_name) {
             std::cout << "Error: Process with name '" << process_name << "' already exists." << std::endl;
             return;
         }
+    }
+
+    // Admission Control
+    if (!mmu->can_admit_process(memory_size)) {
+        std::cout << "Error: Not enough memory to create process '" << process_name << "'." << std::endl;
+        return;
     }
 
     std::vector<std::string> instruction_vec;
@@ -303,7 +325,7 @@ void screen_r(const std::string& process_name) {
         if (process->name == process_name) {
             if (process->status == "memory_violation") {
                 std::cout << "Process <" << process_name << "> shut down due to a memory access violation error that occurred at "
-                    << std::hex << process->faulting_address << std::dec << " <Hex memory address> invalid." << std::endl;
+                          << std::hex << process->faulting_address << std::dec << " <Hex memory address> invalid." << std::endl;
                 return;
             }
             if (process->status == "finished") {
@@ -322,16 +344,21 @@ void process_smi() {
         std::cout << "Error: System not initialized. Use 'initialize' first." << std::endl;
         return;
     }
-
+    
     std::cout << "[PROCESS-SMI]" << std::endl;
-    std::cout << "CPU-UTIL: " << (cpu->get_utilization() * 100) / cpu->get_num_cores() << "%" << std::endl;
-    std::cout << "MEM-UTIL: " << (mmu->get_used_memory() * 100) / mmu->get_total_memory() << "%"
-        << " (" << mmu->get_used_memory() << "B / " << mmu->get_total_memory() << "B)" << std::endl;
+    
+    double cpu_util = (cpu->get_num_cores() > 0) ? (static_cast<double>(cpu->get_utilization()) * 100) / cpu->get_num_cores() : 0.0;
+    double mem_util = (mmu->get_total_memory() > 0) ? (static_cast<double>(mmu->get_used_memory()) * 100) / mmu->get_total_memory() : 0.0;
+
+    std::cout << "CPU-UTIL: " << std::fixed << std::setprecision(0) << cpu_util << "%" << std::endl;
+    std::cout << "MEM-UTIL: " << std::fixed << std::setprecision(0) << mem_util << "%" 
+              << " (" << mmu->get_used_memory() << "B / " << mmu->get_total_memory() << "B)" << std::endl;
+              
     std::cout << "---------------------------------" << std::endl;
     std::cout << "Running processes and memory usage:" << std::endl;
     for (const auto& p : processes) {
-        if (p->status == "running" || p->status == "ready") {
-            std::cout << p->name << ": " << mmu->get_process_memory_usage(p->id) << "B" << std::endl;
+        if (p->status != "finished" && p->status != "memory_violation") {
+            std::cout << p->name << ": " << mmu->get_process_memory_usage(p->id) << "B (" << p->status << ")" << std::endl;
         }
     }
 }
@@ -380,15 +407,14 @@ void report_util() {
 
 void create_process(const std::string& name, int memory_size, const std::vector<std::string>& instructions) {
     auto new_process = std::make_unique<Process>(name, next_process_id++, memory_size, mmu.get());
-
+    
     if (instructions.empty()) {
         new_process->generate_instructions(config->min_instructions, config->max_instructions);
-    }
-    else {
+    } else {
         new_process->instructions = instructions;
         new_process->total_instructions = static_cast<int>(instructions.size());
     }
-
+    
     processes.push_back(std::move(new_process));
     scheduler->add_process(processes.back().get());
 }
@@ -412,18 +438,15 @@ void process_command(const std::string& command) {
         iss >> sub_cmd;
         if (sub_cmd == "-ls") {
             screen_ls();
-        }
-        else if (sub_cmd == "-s") {
+        } else if (sub_cmd == "-s") {
             std::string name;
             int mem_size;
             if (iss >> name >> mem_size) {
                 screen_s(name, mem_size);
-            }
-            else {
+            } else {
                 std::cout << "Usage: screen -s <name> <mem_size>" << std::endl;
             }
-        }
-        else if (sub_cmd == "-c") {
+        } else if (sub_cmd == "-c") {
             std::string name;
             int mem_size;
             std::string instructions;
@@ -433,21 +456,17 @@ void process_command(const std::string& command) {
                     instructions = instructions.substr(1, instructions.length() - 2);
                 }
                 screen_c(name, mem_size, instructions);
-            }
-            else {
+            } else {
                 std::cout << "Usage: screen -c <name> <mem_size> \"<instructions>\"" << std::endl;
             }
-        }
-        else if (sub_cmd == "-r") {
+        } else if (sub_cmd == "-r") {
             std::string name;
             if (iss >> name) {
                 screen_r(name);
-            }
-            else {
+            } else {
                 std::cout << "Usage: screen -r <name>" << std::endl;
             }
-        }
-        else {
+        } else {
             std::cout << "Unknown screen command." << std::endl;
         }
     }

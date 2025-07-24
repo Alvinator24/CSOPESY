@@ -31,6 +31,7 @@ public:
     int memory_size;
     MMU* mmu;
     uint32_t faulting_address;
+    int sleep_until_tick;
 
     Process(const std::string& n, int p_id, int mem_size, MMU* mmu_ptr);
     void generate_instructions(int min_instr, int max_instr);

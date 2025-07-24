@@ -13,7 +13,7 @@ class Process; // Forward declaration
 struct PageFaultException : public std::runtime_error {
     int pid;
     uint32_t address;
-    PageFaultException(const std::string& msg, int process_id, uint32_t fault_address)
+    PageFaultException(const std::string& msg, int process_id, uint32_t fault_address) 
         : std::runtime_error(msg), pid(process_id), address(fault_address) {}
 };
 
@@ -34,9 +34,10 @@ public:
     void write(Process* process, uint32_t virtual_address, uint16_t value);
 
     // Process memory management
+    bool can_admit_process(int memory_size) const;
     bool allocate_memory(int pid, int memory_size);
     void free_memory(int pid);
-
+    
     // Page fault handler
     int handle_page_fault(Process* process, uint32_t virtual_address);
 
@@ -59,6 +60,10 @@ private:
     std::vector<bool> frame_is_free;
     std::map<int, std::vector<PageTableEntry>> page_tables;
     std::string backing_store_path;
+
+    // For admission control
+    int committed_memory = 0;
+    std::map<int, int> process_sizes;
 
     // Page replacement data structures
     std::list<int> lru_list; // For LRU page replacement

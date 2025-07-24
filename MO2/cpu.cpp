@@ -92,18 +92,17 @@ void CPU::execute_processes() {
             Process* process = cores[i].current_process;
 
             bool instruction_executed = false;
-            while (!instruction_executed) {
+            while(!instruction_executed) {
                 try {
                     process->execute_instruction(i);
                     instruction_executed = true; // Succeeded
-                }
-                catch (const PageFaultException& e) {
+                } catch (const PageFaultException& e) {
                     mmu->handle_page_fault(process, e.address);
                     // Instruction will be retried in the next loop iteration
                 }
             }
 
-            if (process->status == "finished" || process->status == "memory_violation") {
+            if (process->status == "finished" || process->status == "memory_violation" || process->status == "blocked") {
                 to_return_to_scheduler.push_back(process);
                 continue;
             }

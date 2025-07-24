@@ -11,7 +11,7 @@ void MMU::initialize(int total_memory, int frame_size) {
     this->total_memory = total_memory;
     this->frame_size = frame_size;
     this->total_frames = total_memory / frame_size;
-
+    
     physical_memory.resize(total_memory, 0);
     frame_is_free.resize(total_frames, true);
 
@@ -35,7 +35,7 @@ uint16_t MMU::read(Process* process, uint32_t virtual_address) {
     int frame_number = page_tables[process->id][page_number].frame_number;
     uint16_t value;
     memcpy(&value, &physical_memory[frame_number * frame_size + offset], sizeof(uint16_t));
-
+    
     return value;
 }
 
@@ -56,6 +56,10 @@ void MMU::write(Process* process, uint32_t virtual_address, uint16_t value) {
     memcpy(&physical_memory[frame_number * frame_size + offset], &value, sizeof(uint16_t));
 }
 
+bool MMU::can_admit_process(int memory_size) const {
+    return (committed_memory + memory_size) <= total_memory;
+}
+
 bool MMU::allocate_memory(int pid, int memory_size) {
     if (page_tables.find(pid) != page_tables.end()) {
         return false; // Already allocated
@@ -63,6 +67,10 @@ bool MMU::allocate_memory(int pid, int memory_size) {
 
     int num_pages = (memory_size + frame_size - 1) / frame_size;
     page_tables[pid].resize(num_pages);
+
+    committed_memory += memory_size;
+    process_sizes[pid] = memory_size;
+
     return true;
 }
 
@@ -75,13 +83,18 @@ void MMU::free_memory(int pid) {
         if (pte.valid) {
             frame_is_free[pte.frame_number] = true;
             // remove from LRU list
-            if (lru_map.count(pte.frame_number)) {
+            if(lru_map.count(pte.frame_number)) {
                 lru_list.erase(lru_map[pte.frame_number]);
                 lru_map.erase(pte.frame_number);
             }
         }
     }
     page_tables.erase(pid);
+
+    if (process_sizes.count(pid)) {
+        committed_memory -= process_sizes[pid];
+        process_sizes.erase(pid);
+    }
 }
 
 int MMU::handle_page_fault(Process* process, uint32_t virtual_address) {
@@ -103,19 +116,19 @@ int MMU::handle_page_fault(Process* process, uint32_t virtual_address) {
         free_frame = find_victim_frame();
         swap_out(free_frame);
     }
-
+    
     // We have a free frame, either new or from a victim
     frame_is_free[free_frame] = false;
     page_tables[process->id][page_number].valid = true;
     page_tables[process->id][page_number].frame_number = free_frame;
     page_tables[process->id][page_number].dirty = false;
-
+    
     swap_in(process->id, page_number, free_frame);
 
     // Update LRU/FIFO list
     lru_list.push_back(free_frame);
     lru_map[free_frame] = --lru_list.end();
-
+    
     return free_frame;
 }
 
@@ -129,7 +142,7 @@ int MMU::get_free_memory() const {
 int MMU::get_process_memory_usage(int pid) const {
     if (page_tables.count(pid)) {
         int valid_pages = 0;
-        for (const auto& pte : page_tables.at(pid)) {
+        for(const auto& pte : page_tables.at(pid)) {
             if (pte.valid) {
                 valid_pages++;
             }
@@ -141,7 +154,7 @@ int MMU::get_process_memory_usage(int pid) const {
 int MMU::get_total_frames() const { return total_frames; }
 int MMU::get_free_frames_count() const {
     int free_count = 0;
-    for (bool status : frame_is_free) {
+    for(bool status : frame_is_free) {
         if (status) {
             free_count++;
         }
@@ -154,9 +167,9 @@ int MMU::get_page_outs() const { return page_outs; }
 int MMU::find_victim_frame() {
     // Simple FIFO
     if (lru_list.empty()) {
-        return -1;
+        return -1; 
     }
-
+    
     int victim_frame = lru_list.front();
     lru_list.pop_front();
     lru_map.erase(victim_frame);
@@ -179,10 +192,10 @@ void MMU::swap_in(int pid, int page_number, int frame_number) {
 
     std::vector<char> buffer(frame_size);
     backing_store.read(buffer.data(), frame_size);
-
+    
     // If we read less than a full frame, it means the page was not in the backing store (first touch).
     // In that case, the buffer is zeroed out by default, which is the desired behavior.
-
+    
     memcpy(&physical_memory[frame_number * frame_size], buffer.data(), frame_size);
 }
 
@@ -194,7 +207,7 @@ void MMU::swap_out(int frame_number) {
         // Should not happen if frame is not free
         return;
     }
-
+    
     if (page_tables[pid][page_number].dirty) {
         std::fstream backing_store(backing_store_path, std::ios::in | std::ios::out | std::ios::binary);
         if (!backing_store) {
@@ -233,4 +246,4 @@ int MMU::get_page_number_from_frame(int frame_number) {
         }
     }
     return -1;
-}
+} 

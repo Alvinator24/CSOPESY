@@ -24,11 +24,11 @@ namespace {
     }
 }
 
-Process::Process(const std::string& n, int p_id, int mem_size, MMU* mmu_ptr)
+Process::Process(const std::string& n, int p_id, int mem_size, MMU* mmu_ptr) 
     : name(n), id(p_id), priority(0),
-    status("ready"), current_instruction(0), arrival_time(0),
-    start_time(-1), completion_time(-1), total_instructions(0),
-    memory_size(mem_size), mmu(mmu_ptr), faulting_address(0) {
+      status("ready"), current_instruction(0), arrival_time(0),
+      start_time(-1), completion_time(-1), total_instructions(0),
+      memory_size(mem_size), mmu(mmu_ptr), faulting_address(0), sleep_until_tick(0) {
     creation_timestamp_str = getCurrentTimestamp(true);
     if (mmu) {
         mmu->allocate_memory(id, memory_size);
@@ -48,8 +48,7 @@ void Process::generate_instructions(int min_instr, int max_instr) {
         case 1: // DECLARE
             if (variables.size() < 32) {
                 instructions.push_back("DECLARE(var" + std::to_string(i) + ", " + std::to_string(rand() % 65535) + ")");
-            }
-            else {
+            } else {
                 i--; // Try again
             }
             break;
@@ -112,12 +111,11 @@ void Process::execute_instruction(int core_id) {
             std::string var_name = instruction.substr(start + 1, comma - start - 1);
             var_name.erase(0, var_name.find_first_not_of(" \t"));
             var_name.erase(var_name.find_last_not_of(" \t") + 1);
-
+            
             uint16_t value = std::stoi(instruction.substr(comma + 1, end - comma - 1));
             if (variables.size() < 32) {
                 variables[var_name] = value;
-            }
-            else {
+            } else {
                 // Optional: Log an error that symbol table is full
             }
         }
@@ -131,7 +129,7 @@ void Process::execute_instruction(int core_id) {
             std::string dest_var = instruction.substr(start + 1, comma1 - start - 1);
             std::string src_var1 = instruction.substr(comma1 + 1, comma2 - comma1 - 1);
             std::string src_var2 = instruction.substr(comma2 + 1, end - comma2 - 1);
-
+            
             // trim whitespace
             dest_var.erase(0, dest_var.find_first_not_of(" \t"));
             dest_var.erase(dest_var.find_last_not_of(" \t") + 1);
@@ -172,18 +170,17 @@ void Process::execute_instruction(int core_id) {
             std::string var_name = instruction.substr(start + 1, comma - start - 1);
             var_name.erase(0, var_name.find_first_not_of(" \t"));
             var_name.erase(var_name.find_last_not_of(" \t") + 1);
-
+            
             std::string address_str = instruction.substr(comma + 1, end - comma - 1);
             address_str.erase(0, address_str.find_first_not_of(" \t"));
             address_str.erase(address_str.find_last_not_of(" \t") + 1);
-
+            
             uint32_t address = 0;
             try {
                 address = std::stoul(address_str, nullptr, 16);
                 if (address >= static_cast<uint32_t>(memory_size)) throw std::out_of_range("Address out of bounds");
                 variables[var_name] = mmu->read(this, address);
-            }
-            catch (const std::out_of_range&) {
+            } catch (const std::out_of_range&) {
                 status = "memory_violation";
                 faulting_address = address;
                 completion_time = cpu->get_current_time();
@@ -212,13 +209,11 @@ void Process::execute_instruction(int core_id) {
                 uint16_t value;
                 if (variables.count(value_str)) {
                     value = variables[value_str];
-                }
-                else {
+                } else {
                     value = std::stoi(value_str);
                 }
                 mmu->write(this, address, value);
-            }
-            catch (const std::out_of_range&) {
+            } catch (const std::out_of_range&) {
                 status = "memory_violation";
                 faulting_address = address;
                 completion_time = cpu->get_current_time();
@@ -231,10 +226,51 @@ void Process::execute_instruction(int core_id) {
         size_t end = instruction.find(')');
         if (start != std::string::npos && end != std::string::npos) {
             int sleep_ticks = std::stoi(instruction.substr(start + 1, end - start - 1));
-            // (void)sleep_ticks; // Suppress warning, sleep is handled by CPU tick delay
+            sleep_until_tick = cpu->get_current_time() + sleep_ticks;
+            status = "blocked";
         }
     }
     else if (instruction.substr(0, 3) == "FOR") {
+        size_t start_bracket = instruction.find('[');
+        size_t end_bracket = instruction.rfind(']');
+        size_t comma = instruction.rfind(',');
+
+        if (start_bracket != std::string::npos && end_bracket != std::string::npos && comma != std::string::npos && comma > end_bracket) {
+            std::string loop_body_str = instruction.substr(start_bracket + 1, end_bracket - start_bracket - 1);
+            std::string repetitions_str = instruction.substr(comma + 1);
+            repetitions_str.erase(0, repetitions_str.find_first_not_of(" \t"));
+            repetitions_str.erase(repetitions_str.find_last_not_of(" \t") + 1);
+
+            try {
+                int repetitions = std::stoi(repetitions_str);
+                if (repetitions > 3) repetitions = 3; // Clamp to 3 as per spec
+
+                std::vector<std::string> loop_instructions;
+                std::stringstream ss(loop_body_str);
+                std::string item;
+                while (std::getline(ss, item, ';')) {
+                    item.erase(0, item.find_first_not_of(" \t\n\r"));
+                    item.erase(item.find_last_not_of(" \t\n\r") + 1);
+                    if (!item.empty()) {
+                        loop_instructions.push_back(item);
+                    }
+                }
+
+                // Unroll the loop by inserting the instructions
+                if (!loop_instructions.empty()) {
+                    std::vector<std::string> unrolled_instructions;
+                    for (int i = 0; i < repetitions; ++i) {
+                        unrolled_instructions.insert(unrolled_instructions.end(), loop_instructions.begin(), loop_instructions.end());
+                    }
+                    
+                    // Insert the unrolled instructions into the main instruction list
+                    instructions.insert(instructions.begin() + current_instruction + 1, unrolled_instructions.begin(), unrolled_instructions.end());
+                    total_instructions += unrolled_instructions.size();
+                }
+            } catch (const std::invalid_argument& e) {
+                // Handle error: could not parse repetitions
+            }
+        }
     }
 
     current_instruction++;

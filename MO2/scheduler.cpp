@@ -35,13 +35,33 @@ Process* Scheduler::get_next_process() {
 }
 
 void Scheduler::return_process(Process* process) {
-    if (process->status != "finished") {
+    if (process->status == "finished") {
+        finished_processes.push_back(process);
+    } else if (process->status == "blocked") {
+        blocked_queue.push_back(process);
+    } else {
         ready_queue.push_back(process);
     }
-    else {
-        finished_processes.push_back(process);
+}
+
+void Scheduler::check_blocked_processes(int current_tick) {
+    std::vector<Process*> processes_to_unblock;
+    
+    blocked_queue.erase(std::remove_if(blocked_queue.begin(), blocked_queue.end(),
+        [&](Process* p) {
+            if (current_tick >= p->sleep_until_tick) {
+                p->status = "ready";
+                processes_to_unblock.push_back(p);
+                return true; // remove from blocked_queue
+            }
+            return false;
+        }), blocked_queue.end());
+
+    for (auto* p : processes_to_unblock) {
+        add_process(p);
     }
 }
+
 
 void Scheduler::display_status(const std::string& status_message) {
     std::cout << "\n==========" << status_message << "==========" << std::endl;
@@ -64,6 +84,15 @@ void Scheduler::display_status(const std::string& status_message) {
         }
         if (no_running) {
             std::cout << "  None" << std::endl;
+        }
+
+        std::cout << "\nBlocked processes:" << std::endl;
+        if (blocked_queue.empty()) {
+            std::cout << "  None" << std::endl;
+        } else {
+            for (const auto& p : blocked_queue) {
+                std::cout << p->name << " (" << p->creation_timestamp_str << ") \tBlocked until tick " << p->sleep_until_tick << std::endl;
+            }
         }
 
         std::cout << "\nFinished processes:" << std::endl;
