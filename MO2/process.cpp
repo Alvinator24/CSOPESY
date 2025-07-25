@@ -1,6 +1,7 @@
 #include "process.h"
 #include "config.h"
 #include "cpu.h"
+#include "mmu.h"
 #include <cstdlib>
 #include <iomanip>
 #include <chrono>
@@ -25,13 +26,16 @@ namespace {
 }
 
 Process::Process(const std::string& n, int p_id, int mem_size, MMU* mmu_ptr) 
-    : name(n), id(p_id), priority(0),
-      status("ready"), current_instruction(0), arrival_time(0),
+    : name(n), pid(p_id), status("ready"), current_instruction(0), arrival_time(0),
       start_time(-1), completion_time(-1), total_instructions(0),
       memory_size(mem_size), mmu(mmu_ptr), faulting_address(0), sleep_until_tick(0) {
     creation_timestamp_str = getCurrentTimestamp(true);
     if (mmu) {
-        mmu->allocate_memory(id, memory_size);
+        if (!mmu->allocate_memory(pid, memory_size)) {
+            status = "blocked";
+            needs_memory_check = true;
+            mem_required = memory_size;
+        }
     }
 }
 
@@ -308,7 +312,7 @@ void Process::execute_instruction(int core_id) {
 
 void Process::display_status() {
     std::cout << "\nProcess Name: " << name << std::endl;
-    std::cout << "ID: " << id << std::endl;
+    std::cout << "ID: " << pid << std::endl;
     std::cout << "Logs:" << std::endl;
     for (const auto& log : output_log) {
         std::cout << log.timestamp << " Core:" << log.core_id << " \"" << log.message << "\"" << std::endl;
@@ -329,7 +333,6 @@ void Process::display_status() {
 
 Process::~Process() {
     if (mmu) {
-        mmu->free_memory(id);
+        mmu->free_memory(pid);
     }
-    std::cout << "[DEBUG] Destroying process: " << name << std::endl;
 }

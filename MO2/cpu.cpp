@@ -29,7 +29,13 @@ int CPU::get_num_cores() const {
 }
 
 int CPU::get_utilization() const {
-    return static_cast<int>(running_processes.size());
+    int busy_cores = 0;
+    for (const auto& core : cores) {
+        if (core.current_process != nullptr) {
+            busy_cores++;
+        }
+    }
+    return busy_cores;
 }
 
 void CPU::tick() {
@@ -85,46 +91,35 @@ void CPU::remove_process(Process* process) {
 }
 
 void CPU::execute_processes() {
-    std::vector<Process*> to_return_to_scheduler;
+    for (auto& core : cores) {
+        if (core.current_process && core.current_process->status == "running") {
+            int instructions_to_execute = (scheduler->get_type() == "rr") ? core.time_slice_remaining : 1;
 
-    for (int i = 0; i < cores.size(); ++i) {
-        if (cores[i].current_process && cores[i].current_process->status == "running") {
-            Process* process = cores[i].current_process;
-
-            bool instruction_executed = false;
-            while(!instruction_executed) {
+            for (int i = 0; i < instructions_to_execute && core.current_process->status == "running"; ++i) {
                 try {
-                    process->execute_instruction(i);
-                    instruction_executed = true; // Succeeded
+                    core.current_process->execute_instruction(core.id);
                 } catch (const PageFaultException& e) {
-                    mmu->handle_page_fault(process, e.address);
-                    // Instruction will be retried in the next loop iteration
+                    mmu->handle_page_fault(core.current_process, e.address);
+                    // The instruction will be retried on the next tick because we break the loop.
+                    // To execute multiple instructions per tick, we'd need to adjust this.
+                    // For now, let's stick to one attempt per tick to handle page faults simply.
+                    break;
                 } catch (const std::exception& e) {
-                    std::cerr << "Process " << process->name << " encountered a runtime error: " << e.what() << std::endl;
-                    process->status = "memory_violation"; // Explicitly set status here
-                    instruction_executed = true;
+                    std::cerr << "Process " << core.current_process->name << " encountered a runtime error: " << e.what() << std::endl;
+                    core.current_process->status = "memory_violation";
+                    break;
                 }
             }
 
-            if (process->status == "finished" || process->status == "memory_violation" || process->status == "blocked") {
-                to_return_to_scheduler.push_back(process);
-                continue;
+            if (scheduler->get_type() == "rr") {
+                core.time_slice_remaining--;
             }
 
-            if (config->scheduler_type == "rr") {
-                cores[i].time_slice_remaining--;
-
-                if (cores[i].time_slice_remaining <= 0) {
-                    process->status = "ready";
-                    to_return_to_scheduler.push_back(process);
-                }
+            if (core.current_process->status != "running" || (scheduler->get_type() == "rr" && core.time_slice_remaining <= 0)) {
+                scheduler->return_process(core.current_process);
+                core.current_process = nullptr;
             }
         }
-    }
-
-    for (auto process : to_return_to_scheduler) {
-        remove_process(process);
-        scheduler->return_process(process);
     }
 }
 

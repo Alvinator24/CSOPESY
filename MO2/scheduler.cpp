@@ -2,6 +2,7 @@
 #include "process.h"
 #include "cpu.h"
 #include "config.h"
+#include "mmu.h"
 #include <iostream>
 #include <iomanip>
 #include<memory>
@@ -38,15 +39,20 @@ void Scheduler::return_process(Process* process) {
     if (process->status == "finished" || process->status == "memory_violation") {
         finished_processes.push_back(process);
     } else if (process->status == "blocked") {
-        blocked_queue.push_back(process);
+        if (process->needs_memory_check) {
+            memory_blocked_queue.push_back(process);
+        } else {
+            blocked_queue.push_back(process);
+        }
     } else {
         ready_queue.push_back(process);
     }
 }
 
-void Scheduler::check_blocked_processes(int current_tick) {
+void Scheduler::check_blocked_processes(int current_tick, MMU* mmu) {
     std::vector<Process*> processes_to_unblock;
-    
+
+    // Unblock processes that were sleeping
     blocked_queue.erase(std::remove_if(blocked_queue.begin(), blocked_queue.end(),
         [&](Process* p) {
             if (current_tick >= p->sleep_until_tick) {
@@ -56,6 +62,18 @@ void Scheduler::check_blocked_processes(int current_tick) {
             }
             return false;
         }), blocked_queue.end());
+
+    // Attempt to allocate memory for memory-blocked processes
+    memory_blocked_queue.erase(std::remove_if(memory_blocked_queue.begin(), memory_blocked_queue.end(),
+        [&](Process* p) {
+            if (mmu->allocate_memory(p->pid, p->mem_required)) {
+                p->status = "ready";
+                p->needs_memory_check = false;
+                processes_to_unblock.push_back(p);
+                return true; // remove from memory_blocked_queue
+            }
+            return false;
+        }), memory_blocked_queue.end());
 
     for (auto* p : processes_to_unblock) {
         add_process(p);

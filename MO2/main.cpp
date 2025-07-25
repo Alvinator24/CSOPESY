@@ -174,6 +174,9 @@ void initialize_system() {
                 }
             }
 
+            // Check and unblock processes
+            scheduler->check_blocked_processes(tick_count, mmu.get());
+
             // Scheduling and Execution (always running)
             while (cpu->can_run_process()) {
                 Process* next_process = scheduler->get_next_process();
@@ -186,6 +189,17 @@ void initialize_system() {
 
             cpu->tick();
             cpu->execute_processes();
+
+            // Cleanup finished processes to free memory
+            /*
+            processes.erase(
+                std::remove_if(processes.begin(), processes.end(), 
+                    [](const std::unique_ptr<Process>& p) {
+                        return p->status == "finished" || p->status == "memory_violation";
+                    }), 
+                processes.end()
+            );
+            */
         }
         });
 }
@@ -358,7 +372,7 @@ void process_smi() {
     std::cout << "Running processes and memory usage:" << std::endl;
     for (const auto& p : processes) {
         if (p->status != "finished" && p->status != "memory_violation") {
-            std::cout << p->name << ": " << mmu->get_process_memory_usage(p->id) << "B (" << p->status << ")" << std::endl;
+            std::cout << p->name << ": " << mmu->get_process_memory_usage(p->pid) << "B (" << p->status << ")" << std::endl;
         }
     }
 }

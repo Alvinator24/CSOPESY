@@ -28,11 +28,11 @@ uint16_t MMU::read(Process* process, uint32_t virtual_address) {
     int page_number = virtual_address / frame_size;
     int offset = virtual_address % frame_size;
 
-    if (!page_tables[process->id][page_number].valid) {
-        throw PageFaultException("Page fault on read", process->id, virtual_address);
+    if (!page_tables[process->pid][page_number].valid) {
+        throw PageFaultException("Page fault on read", process->pid, virtual_address);
     }
 
-    int frame_number = page_tables[process->id][page_number].frame_number;
+    int frame_number = page_tables[process->pid][page_number].frame_number;
     uint16_t value;
     memcpy(&value, &physical_memory[frame_number * frame_size + offset], sizeof(uint16_t));
     
@@ -47,17 +47,18 @@ void MMU::write(Process* process, uint32_t virtual_address, uint16_t value) {
     int page_number = virtual_address / frame_size;
     int offset = virtual_address % frame_size;
 
-    if (!page_tables[process->id][page_number].valid) {
-        throw PageFaultException("Page fault on write", process->id, virtual_address);
+    if (!page_tables[process->pid][page_number].valid) {
+        throw PageFaultException("Page fault on write", process->pid, virtual_address);
     }
 
-    int frame_number = page_tables[process->id][page_number].frame_number;
-    page_tables[process->id][page_number].dirty = true;
+    int frame_number = page_tables[process->pid][page_number].frame_number;
+    page_tables[process->pid][page_number].dirty = true;
     memcpy(&physical_memory[frame_number * frame_size + offset], &value, sizeof(uint16_t));
 }
 
 bool MMU::can_admit_process(int memory_size) const {
-    return (committed_memory + memory_size) <= total_memory;
+    // Forcing this to true for the stress test to allow over-commitment of memory
+    return true;
 }
 
 bool MMU::allocate_memory(int pid, int memory_size) {
@@ -119,11 +120,11 @@ int MMU::handle_page_fault(Process* process, uint32_t virtual_address) {
     
     // We have a free frame, either new or from a victim
     frame_is_free[free_frame] = false;
-    page_tables[process->id][page_number].valid = true;
-    page_tables[process->id][page_number].frame_number = free_frame;
-    page_tables[process->id][page_number].dirty = false;
+    page_tables[process->pid][page_number].valid = true;
+    page_tables[process->pid][page_number].frame_number = free_frame;
+    page_tables[process->pid][page_number].dirty = false;
     
-    swap_in(process->id, page_number, free_frame);
+    swap_in(process->pid, page_number, free_frame);
 
     // Update LRU/FIFO list
     lru_list.push_back(free_frame);

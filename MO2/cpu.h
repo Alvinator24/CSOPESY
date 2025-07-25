@@ -1,3 +1,6 @@
+#ifndef CPU_H
+#define CPU_H
+
 #pragma once
 #include <vector>
 #include <string>
@@ -38,3 +41,5 @@ public:
 
 private:
 };
+
+#endif // CPU_H
