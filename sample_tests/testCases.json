@@ -1,0 +1,160 @@
+[
+  {
+    "test_name": "Test 1: Memory Constraint on Process Creation",
+    "description": "Tests if the system correctly handles memory limits by preventing a second process from being created when total memory is insufficient.",
+    "config_parameters": {
+      "num-cpu": 2,
+      "scheduler": "fcfs",
+      "quantum-cycles": 0,
+      "batch-process-freq": 1,
+      "min-ins": 4000,
+      "max-ins": 4000,
+      "delay-per-exec": 0,
+      "max-overall-mem": 512,
+      "mem-per-frame": 256,
+      "min-mem-per-proc": 512,
+      "max-mem-per-proc": 512
+    },
+    "command_sequence": [
+      {
+        "step": 1,
+        "command": "screen -c process1 512 \"ADD varA 1 1\"",
+        "description": "Create the first process, which should successfully allocate all available memory."
+      },
+      {
+        "step": 2,
+        "command": "screen -c process2 512 \"ADD varB 1 1\"",
+        "description": "Attempt to create a second process, which should fail due to lack of memory."
+      },
+      {
+        "step": 3,
+        "command": "WAIT",
+        "duration_seconds": 5
+      },
+      {
+        "step": 4,
+        "command": "screen -ls"
+      },
+      {
+        "step": 5,
+        "command": "process-smi"
+      }
+    ],
+    "expected_output": "The system's total memory is 512 bytes. The first process requests and is allocated 512 bytes. The second process also requests 512 bytes, but creation fails as there is no memory left. Commands like `screen -ls` and `process-smi` should only show 'process1' as running or in the ready queue."
+  },
+  {
+    "test_name": "Test 2: Single-Process Execution due to Memory Limit",
+    "description": "Tests the system's behavior when memory is constrained to a single frame, limiting execution to one process at a time despite having many available CPUs.",
+    "config_parameters": {
+      "num-cpu": 16,
+      "scheduler": "rr",
+      "quantum-cycles": 5,
+      "batch-process-freq": 1,
+      "min-ins": 1000,
+      "max-ins": 2000,
+      "delay-per-exec": 1,
+      "max-overall-mem": 32768,
+      "mem-per-frame": 32768,
+      "min-mem-per-proc": 32768,
+      "max-mem-per-proc": 32768
+    },
+    "command_sequence": [
+      {
+        "step": 1,
+        "command": "scheduler-start"
+      },
+      {
+        "step": 2,
+        "command": "WAIT",
+        "duration_seconds": 5
+      },
+      {
+        "step": 3,
+        "command": "process-smi"
+      },
+      {
+        "step": 4,
+        "command": "screen -ls"
+      },
+      {
+        "step": 5,
+        "command": "vmstat"
+      }
+    ],
+    "expected_output": "The system memory configuration (max memory equals frame size) allows only one process to run at a time. The `screen-ls` command should show a total CPU utilization of approximately 6.25% (1/16 cores). The `vmstat` command should report 'Used memory' as 32768 and 'Free memory' as 0."
+  },
+  {
+    "test_name": "Test 3: Valid Memory Read/Write Operations",
+    "description": "Tests the functionality of DECLARE, WRITE, and READ instructions within a process's validly allocated memory space.",
+    "config_parameters": {
+      "num-cpu": 1,
+      "scheduler": "rr",
+      "quantum-cycles": 10,
+      "batch-process-freq": 1,
+      "min-ins": 1000,
+      "max-ins": 1000,
+      "delay-per-exec": 0,
+      "max-overall-mem": 256,
+      "mem-per-frame": 256,
+      "min-mem-per-proc": 256,
+      "max-mem-per-proc": 256
+    },
+    "command_sequence": [
+      {
+        "step": 1,
+        "command": "screen -c rw_test 256 \"DECLARE varA 10; DECLARE varB 5; ADD varA varA varB; WRITE 0x50 varA; READ varC 0x50; PRINT(\\\"Result: \\\" + varC)\"",
+        "note": "The original test case specified an invalid memory address '0x500' for a 256-byte process. It has been corrected to a valid address '0x50' (decimal 80) to test for successful execution as implied by the expected output."
+      },
+      {
+        "step": 2,
+        "command": "screen -ls"
+      },
+      {
+        "step": 3,
+        "command": "screen -r rw_test",
+        "description": "Attach to the process to view its console output."
+      }
+    ],
+    "expected_output": "The process should execute all instructions successfully. After attaching with `screen -r`, the console should display the output from the PRINT instruction: 'Result: 15'. This confirms that the value 15 was correctly written to memory address 0x50 and then read back into variable C."
+  },
+  {
+    "test_name": "Test 4: Memory Paging Stress Test",
+    "description": "A stress test to verify the demand paging mechanism under heavy load, forcing constant page swapping between RAM and the backing store.",
+    "config_parameters": {
+      "num-cpu": 32,
+      "scheduler": "fcfs",
+      "quantum-cycles": 5,
+      "batch-process-freq": 1,
+      "min-ins": 100,
+      "max-ins": 100,
+      "delay-per-exec": 0,
+      "max-overall-mem": 4096,
+      "mem-per-frame": 64,
+      "min-mem-per-proc": 512,
+      "max-mem-per-proc": 512
+    },
+    "command_sequence": [
+      {
+        "step": 1,
+        "command": "scheduler-start"
+      },
+      {
+        "step": 2,
+        "command": "WAIT",
+        "duration_seconds": 20
+      },
+      {
+        "step": 3,
+        "command": "LOOP",
+        "interval_seconds": 2,
+        "total_duration_seconds": 20,
+        "sub_commands": [
+          "process-smi",
+          "vmstat"
+        ],
+        "description": "Repeatedly check system status every 2 seconds for 20 seconds."
+      }
+    ],
+    "expected_output": "The system must run without deadlocking. The `vmstat` output should indicate that memory is fully utilized. Crucially, the 'Num paged in' and 'Num paged out' counters in `vmstat` should be continuously increasing, which demonstrates that the page swapping mechanism is active and working correctly. As processes have short instruction lists, they should gradually complete and move to a 'finished' state."
+  }
+]
