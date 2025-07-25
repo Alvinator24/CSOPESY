@@ -4,6 +4,7 @@
 #include <map>
 #include <iostream>
 #include <cstdint>
+#include <stack>
 
 #include "mmu.h"
 
@@ -11,6 +12,12 @@ struct LogEntry {
     std::string timestamp;
     int core_id;
     std::string message;
+};
+
+struct LoopContext {
+    int loop_counter;
+    int loop_start_instruction;
+    std::vector<std::string> loop_body;
 };
 
 class Process {
@@ -32,6 +39,7 @@ public:
     MMU* mmu;
     uint32_t faulting_address;
     int sleep_until_tick;
+    std::stack<LoopContext> loop_stack;
 
     Process(const std::string& n, int p_id, int mem_size, MMU* mmu_ptr);
     void generate_instructions(int min_instr, int max_instr);

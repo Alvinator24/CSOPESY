@@ -400,8 +400,16 @@ void report_util() {
         return;
     }
 
+    // Redirect cout to the file
+    std::streambuf* coutbuf = std::cout.rdbuf(); 
+    std::cout.rdbuf(report_file.rdbuf());
+
     report_file << "report-util triggered" << std::endl;
     scheduler->display_status("report-util");
+
+    // Restore cout
+    std::cout.rdbuf(coutbuf);
+
     std::cout << "Report generated at C:/csopesy-log.txt" << std::endl;
 }
 

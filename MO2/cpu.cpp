@@ -99,6 +99,10 @@ void CPU::execute_processes() {
                 } catch (const PageFaultException& e) {
                     mmu->handle_page_fault(process, e.address);
                     // Instruction will be retried in the next loop iteration
+                } catch (const std::exception& e) {
+                    std::cerr << "Process " << process->name << " encountered a runtime error: " << e.what() << std::endl;
+                    process->status = "memory_violation"; // Explicitly set status here
+                    instruction_executed = true;
                 }
             }
 

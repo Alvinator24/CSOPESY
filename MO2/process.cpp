@@ -236,41 +236,67 @@ void Process::execute_instruction(int core_id) {
         size_t comma = instruction.rfind(',');
 
         if (start_bracket != std::string::npos && end_bracket != std::string::npos && comma != std::string::npos && comma > end_bracket) {
+            if (loop_stack.size() >= 3) {
+                // As per spec, ignore loops nested deeper than 3 levels
+                current_instruction++;
+                return;
+            }
+
             std::string loop_body_str = instruction.substr(start_bracket + 1, end_bracket - start_bracket - 1);
             std::string repetitions_str = instruction.substr(comma + 1);
             repetitions_str.erase(0, repetitions_str.find_first_not_of(" \t"));
             repetitions_str.erase(repetitions_str.find_last_not_of(" \t") + 1);
-
+            
             try {
                 int repetitions = std::stoi(repetitions_str);
-                if (repetitions > 3) repetitions = 3; // Clamp to 3 as per spec
+                
+                LoopContext new_loop;
+                new_loop.loop_counter = repetitions;
+                new_loop.loop_start_instruction = current_instruction;
 
-                std::vector<std::string> loop_instructions;
                 std::stringstream ss(loop_body_str);
                 std::string item;
                 while (std::getline(ss, item, ';')) {
                     item.erase(0, item.find_first_not_of(" \t\n\r"));
                     item.erase(item.find_last_not_of(" \t\n\r") + 1);
                     if (!item.empty()) {
-                        loop_instructions.push_back(item);
+                        new_loop.loop_body.push_back(item);
                     }
                 }
+                new_loop.loop_body.push_back("END"); // Sentinel to mark end of loop iteration
 
-                // Unroll the loop by inserting the instructions
-                if (!loop_instructions.empty()) {
-                    std::vector<std::string> unrolled_instructions;
-                    for (int i = 0; i < repetitions; ++i) {
-                        unrolled_instructions.insert(unrolled_instructions.end(), loop_instructions.begin(), loop_instructions.end());
-                    }
-                    
-                    // Insert the unrolled instructions into the main instruction list
-                    instructions.insert(instructions.begin() + current_instruction + 1, unrolled_instructions.begin(), unrolled_instructions.end());
-                    total_instructions += unrolled_instructions.size();
-                }
+                // Replace the FOR instruction with the body
+                instructions.erase(instructions.begin() + current_instruction);
+                instructions.insert(instructions.begin() + current_instruction, new_loop.loop_body.begin(), new_loop.loop_body.end());
+                
+                new_loop.loop_counter--; // Decrement for the first run
+                loop_stack.push(new_loop);
+
             } catch (const std::invalid_argument& e) {
-                // Handle error: could not parse repetitions
+                // Could not parse repetitions, skip instruction
+                current_instruction++;
             }
+        } else {
+            // Malformed FOR, skip
+            current_instruction++;
         }
+        // Do not increment current_instruction here, we want to execute the first instruction of the loop body
+        return; 
+    } else if (instruction == "END") {
+        if (!loop_stack.empty()) {
+            LoopContext& current_loop = loop_stack.top();
+            if (current_loop.loop_counter > 0) {
+                current_loop.loop_counter--;
+                current_instruction = current_loop.loop_start_instruction; // Jump to start of loop
+            } else {
+                loop_stack.pop(); // Loop finished
+                current_instruction++;
+            }
+        } else {
+            // END outside of a loop, just skip
+            current_instruction++;
+        }
+        return;
     }
 
     current_instruction++;
@@ -302,5 +328,8 @@ void Process::display_status() {
 }
 
 Process::~Process() {
+    if (mmu) {
+        mmu->free_memory(id);
+    }
     std::cout << "[DEBUG] Destroying process: " << name << std::endl;
 }

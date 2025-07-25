@@ -35,7 +35,7 @@ Process* Scheduler::get_next_process() {
 }
 
 void Scheduler::return_process(Process* process) {
-    if (process->status == "finished") {
+    if (process->status == "finished" || process->status == "memory_violation") {
         finished_processes.push_back(process);
     } else if (process->status == "blocked") {
         blocked_queue.push_back(process);
@@ -101,8 +101,9 @@ void Scheduler::display_status(const std::string& status_message) {
         }
         else {
             for (const auto& p : finished_processes) {
-                std::cout << p->name << " (" << p->creation_timestamp_str << ") \tFinished \t"
-                    << p->total_instructions << " / " << p->total_instructions << std::endl;
+                std::cout << p->name << " (" << p->creation_timestamp_str << ") \t"
+                          << std::left << std::setw(10) << p->status << "\t"
+                          << p->current_instruction << " / " << p->total_instructions << std::endl;
             }
         }
         std::cout << "--------------------------------------------------" << std::endl;
