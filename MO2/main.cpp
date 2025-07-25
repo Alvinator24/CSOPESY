@@ -42,7 +42,7 @@ void process_smi();
 void vmstat();
 void report_util();
 void process_command(const std::string& command);
-void create_process(const std::string& name, int memory_size, const std::vector<std::string>& instructions = {});
+bool create_process(const std::string& name, int memory_size, const std::vector<std::string>& instructions = {});
 void attach_to_screen(Process* target_process);
 
 int main() {
@@ -169,8 +169,9 @@ void initialize_system() {
                 
                 // Admission Control for auto-generated processes
                 if (mmu->can_admit_process(mem_size)) {
-                    create_process(process_name, mem_size);
-                    next_process_id++;
+                    if (create_process(process_name, mem_size)) {
+                        next_process_id++;
+                    }
                 }
             }
 
@@ -266,12 +267,12 @@ void screen_s(const std::string& process_name, int memory_size) {
     }
 
     // If the name is unique, create the new process
-    create_process(process_name, memory_size);
-    std::cout << "Process '" << process_name << "' created successfully with " << memory_size << " bytes of memory." << std::endl;
-
-    // Attach to the newly created process's screen
-    Process* new_process = processes.back().get();
-    attach_to_screen(new_process);
+    if (create_process(process_name, memory_size)) {
+        std::cout << "Process '" << process_name << "' created successfully with " << memory_size << " bytes of memory." << std::endl;
+        // Attach to the newly created process's screen
+        Process* new_process = processes.back().get();
+        attach_to_screen(new_process);
+    }
 }
 
 void screen_c(const std::string& process_name, int memory_size, const std::string& instructions_str) {
@@ -311,8 +312,9 @@ void screen_c(const std::string& process_name, int memory_size, const std::strin
         }
     }
 
-    create_process(process_name, memory_size, instruction_vec);
-    std::cout << "Process '" << process_name << "' created successfully with custom instructions." << std::endl;
+    if (create_process(process_name, memory_size, instruction_vec)) {
+        std::cout << "Process '" << process_name << "' created successfully with custom instructions." << std::endl;
+    }
 }
 
 void screen_r(const std::string& process_name) {
@@ -324,8 +326,9 @@ void screen_r(const std::string& process_name) {
     for (auto& process : processes) {
         if (process->name == process_name) {
             if (process->status == "memory_violation") {
-                std::cout << "Process <" << process_name << "> shut down due to a memory access violation error that occurred at "
-                          << std::hex << process->faulting_address << std::dec << " <Hex memory address> invalid." << std::endl;
+                std::cout << "Process <" << process_name << "> shut down due to memory access violation error that occurred at "
+                          << process->completion_timestamp_str << ": " 
+                          << std::hex << process->faulting_address << std::dec << " invalid." << std::endl;
                 return;
             }
             if (process->status == "finished") {
@@ -344,23 +347,36 @@ void process_smi() {
         std::cout << "Error: System not initialized. Use 'initialize' first." << std::endl;
         return;
     }
-    
-    std::cout << "[PROCESS-SMI]" << std::endl;
-    
-    double cpu_util = (cpu->get_num_cores() > 0) ? (static_cast<double>(cpu->get_utilization()) * 100) / cpu->get_num_cores() : 0.0;
-    double mem_util = (mmu->get_total_memory() > 0) ? (static_cast<double>(mmu->get_used_memory()) * 100) / mmu->get_total_memory() : 0.0;
 
-    std::cout << "CPU-UTIL: " << std::fixed << std::setprecision(0) << cpu_util << "%" << std::endl;
-    std::cout << "MEM-UTIL: " << std::fixed << std::setprecision(0) << mem_util << "%" 
-              << " (" << mmu->get_used_memory() << "B / " << mmu->get_total_memory() << "B)" << std::endl;
-              
-    std::cout << "---------------------------------" << std::endl;
-    std::cout << "Running processes and memory usage:" << std::endl;
+    double cpu_util = (cpu->get_num_cores() > 0) ? (static_cast<double>(cpu->get_utilization()) * 100) / cpu->get_num_cores() : 0.0;
+    long long total_mem_bytes = mmu->get_total_memory();
+    long long used_mem_bytes = mmu->get_used_memory();
+    double mem_util = (total_mem_bytes > 0) ? (static_cast<double>(used_mem_bytes) * 100) / total_mem_bytes : 0.0;
+
+    auto to_mib = [](long long bytes) {
+        return static_cast<double>(bytes) / (1024 * 1024);
+    };
+
+    std::cout << "+--------------------------------------------------+" << std::endl;
+    std::cout << "| PROCESS-SMI V01 Driver Version: 01.00            |" << std::endl;
+    std::cout << "|--------------------------------------------------|" << std::endl;
+    std::cout << "| CPU-Util: " << std::left << std::setw(36) << (std::to_string((int)cpu_util) + "%") << "|" << std::endl;
+    std::cout << "| Memory Usage: " << std::fixed << std::setprecision(0) << to_mib(used_mem_bytes) << "MiB / " 
+              << std::fixed << std::setprecision(0) << to_mib(total_mem_bytes) << "MiB" << std::right << std::setw(18) << "|" << std::endl;
+    std::cout << "| Memory Util: " << std::left << std::setw(35) << (std::to_string((int)mem_util) + "%") << "|" << std::endl;
+    std::cout << "|--------------------------------------------------|" << std::endl;
+    std::cout << "| Running processes and memory usage:              |" << std::endl;
+    std::cout << "|==================================================|" << std::endl;
+
     for (const auto& p : processes) {
         if (p->status != "finished" && p->status != "memory_violation") {
-            std::cout << p->name << ": " << mmu->get_process_memory_usage(p->id) << "B (" << p->status << ")" << std::endl;
+            long long proc_mem_bytes = mmu->get_process_memory_usage(p->id);
+            std::string line = "| " + p->name + "  " + std::to_string((int)to_mib(proc_mem_bytes)) + "MiB";
+            std::cout << std::left << std::setw(49) << line << "|" << std::endl;
         }
     }
+
+    std::cout << "+--------------------------------------------------+" << std::endl;
 }
 
 void vmstat() {
@@ -369,21 +385,23 @@ void vmstat() {
         return;
     }
 
-    std::cout << "[VMSTAT]" << std::endl;
-    std::cout << "Total main memory: " << mmu->get_total_memory() << "B" << std::endl;
-    std::cout << "Used memory: " << mmu->get_used_memory() << "B" << std::endl;
-    std::cout << "Free memory: " << mmu->get_free_memory() << "B" << std::endl;
-    // Active/Inactive memory is not implemented yet in MMU
-    // std::cout << "Active memory: " << mmu->get_active_memory() << "B" << std::endl;
-    // std::cout << "Inactive memory: " << mmu->get_inactive_memory() << "B" << std::endl;
-    std::cout << "---" << std::endl;
-    // Ticks are not fully implemented in CPU for this level of detail
-    // std::cout << "Idle cpu ticks: " << cpu->get_idle_ticks() << std::endl;
-    // std::cout << "Active cpu ticks: " << cpu->get_active_ticks() << std::endl;
-    // std::cout << "Total cpu ticks: " << cpu->get_total_ticks() << std::endl;
-    std::cout << "---" << std::endl;
-    std::cout << "Num paged in: " << mmu->get_page_ins() << std::endl;
-    std::cout << "Num paged out: " << mmu->get_page_outs() << std::endl;
+    // Dummy values for ticks as they are not fully implemented
+    int idle_ticks = 0;
+    int active_ticks = cpu->get_total_busy_time();
+    int total_ticks = cpu->get_current_time() * cpu->get_num_cores();
+    idle_ticks = total_ticks - active_ticks;
+
+
+    std::cout << std::left << std::setw(20) << "Total memory:" << mmu->get_total_memory() << "B" << std::endl;
+    std::cout << std::left << std::setw(20) << "Used memory:" << mmu->get_used_memory() << "B" << std::endl;
+    std::cout << std::left << std::setw(20) << "Free memory:" << mmu->get_free_memory() << "B" << std::endl;
+    std::cout << "-----------------------------------" << std::endl;
+    std::cout << std::left << std::setw(20) << "Idle cpu ticks:" << idle_ticks << std::endl;
+    std::cout << std::left << std::setw(20) << "Active cpu ticks:" << active_ticks << std::endl;
+    std::cout << std::left << std::setw(20) << "Total cpu ticks:" << total_ticks << std::endl;
+    std::cout << "-----------------------------------" << std::endl;
+    std::cout << std::left << std::setw(20) << "Num paged in:" << mmu->get_page_ins() << std::endl;
+    std::cout << std::left << std::setw(20) << "Num paged out:" << mmu->get_page_outs() << std::endl;
 }
 
 
@@ -413,18 +431,65 @@ void report_util() {
     std::cout << "Report generated at C:/csopesy-log.txt" << std::endl;
 }
 
-void create_process(const std::string& name, int memory_size, const std::vector<std::string>& instructions) {
-    auto new_process = std::make_unique<Process>(name, next_process_id++, memory_size, mmu.get());
-    
-    if (instructions.empty()) {
-        new_process->generate_instructions(config->min_instructions, config->max_instructions);
-    } else {
-        new_process->instructions = instructions;
-        new_process->total_instructions = static_cast<int>(instructions.size());
+namespace { // Anonymous namespace for helper function
+    std::vector<std::string> generate_random_instructions(const std::string& process_name, int min_instr, int max_instr, int memory_size) {
+        std::vector<std::string> instructions;
+        int num_instructions = rand() % (max_instr - min_instr + 1) + min_instr;
+
+        for (int i = 0; i < num_instructions; i++) {
+            int instruction_type = rand() % 8;
+            switch (instruction_type) {
+            case 0: instructions.push_back("PRINT(\"Process " + process_name + " message " + std::to_string(i) + "\")"); break;
+            case 1: instructions.push_back("DECLARE(var" + std::to_string(i) + ", " + std::to_string(rand() % 65535) + ")"); break;
+            case 2: instructions.push_back("ADD(var" + std::to_string(i) + ", var" + std::to_string(i > 0 ? i - 1 : 0) + ", var" + std::to_string(i > 1 ? i - 2 : 0) + ")"); break;
+            case 3: instructions.push_back("SUBTRACT(var" + std::to_string(i) + ", var" + std::to_string(i > 0 ? i - 1 : 0) + ", var" + std::to_string(i > 1 ? i - 2 : 0) + ")"); break;
+            case 4: instructions.push_back("SLEEP(" + std::to_string(rand() % 5 + 1) + ")"); break;
+            case 5: instructions.push_back("FOR([PRINT(\"Loop iteration\")], " + std::to_string(rand() % 3 + 1) + ")"); break;
+            case 6: {
+                std::stringstream ss;
+                ss << "0x" << std::hex << (rand() % (memory_size > 0 ? memory_size : 256));
+                instructions.push_back("READ(var" + std::to_string(i) + ", " + ss.str() + ")");
+                break;
+            }
+            case 7: {
+                std::stringstream ss;
+                ss << "0x" << std::hex << (rand() % (memory_size > 0 ? memory_size : 256));
+                instructions.push_back("WRITE(" + ss.str() + ", " + std::to_string(rand() % 65535) + ")");
+                break;
+            }
+            }
+        }
+        return instructions;
     }
-    
+}
+
+bool create_process(const std::string& name, int memory_size, const std::vector<std::string>& instructions_param) {
+    const int INSTRUCTION_SIZE_BYTES = 8;
+    const int SYMBOL_TABLE_SIZE_BYTES = 64;
+
+    std::vector<std::string> final_instructions;
+
+    if (instructions_param.empty()) {
+        final_instructions = generate_random_instructions(name, config->min_instructions, config->max_instructions, memory_size);
+    }
+    else {
+        final_instructions = instructions_param;
+    }
+
+    int required_memory = (final_instructions.size() * INSTRUCTION_SIZE_BYTES) + SYMBOL_TABLE_SIZE_BYTES;
+
+    if (required_memory > memory_size) {
+        std::cout << "Error: Process '" << name << "' cannot be created. "
+            << "Required memory for code and data (" << required_memory << " bytes) exceeds allocated memory ("
+            << memory_size << " bytes)." << std::endl;
+        return false;
+    }
+
+    // Validation passes, create the process
+    auto new_process = std::make_unique<Process>(name, next_process_id, memory_size, mmu.get(), final_instructions);
     processes.push_back(std::move(new_process));
     scheduler->add_process(processes.back().get());
+    return true;
 }
 
 void process_command(const std::string& command) {

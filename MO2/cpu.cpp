@@ -32,6 +32,10 @@ int CPU::get_utilization() const {
     return static_cast<int>(running_processes.size());
 }
 
+long long CPU::get_total_busy_time() const {
+    return total_busy_time;
+}
+
 void CPU::tick() {
     current_time++;
     for (const auto& core : cores) {

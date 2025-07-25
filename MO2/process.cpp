@@ -35,6 +35,12 @@ Process::Process(const std::string& n, int p_id, int mem_size, MMU* mmu_ptr)
     }
 }
 
+Process::Process(const std::string& n, int p_id, int mem_size, MMU* mmu_ptr, const std::vector<std::string>& instr)
+    : Process(n, p_id, mem_size, mmu_ptr) {
+    instructions = instr;
+    total_instructions = static_cast<int>(instructions.size());
+}
+
 void Process::generate_instructions(int min_instr, int max_instr) {
     int num_instructions = rand() % (max_instr - min_instr + 1) + min_instr;
     total_instructions = num_instructions;
@@ -86,6 +92,7 @@ void Process::execute_instruction(int core_id) {
     if (current_instruction >= instructions.size()) {
         status = "finished";
         completion_time = cpu->get_current_time();
+        completion_timestamp_str = getCurrentTimestamp(true);
         return;
     }
 
@@ -113,10 +120,26 @@ void Process::execute_instruction(int core_id) {
             var_name.erase(var_name.find_last_not_of(" \t") + 1);
             
             uint16_t value = std::stoi(instruction.substr(comma + 1, end - comma - 1));
-            if (variables.size() < 32) {
-                variables[var_name] = value;
+            
+            // Check if variable already exists to avoid re-allocating space in symbol table
+            if (variables.find(var_name) == variables.end()) {
+                if (variables.size() < 32) {
+                    uint32_t address = variables.size() * sizeof(uint16_t); // Simple offset calculation
+                    variables[var_name] = value;
+                    mmu->write(this, address, value); // This can trigger a page fault
+                } else {
+                    // Symbol table is full, ignore as per spec
+                }
             } else {
-                // Optional: Log an error that symbol table is full
+                // Variable already exists, just update its value
+                variables[var_name] = value;
+                // Find address and update it in memory
+                uint32_t address = 0;
+                for (auto const& [key, val] : variables) {
+                    if (key == var_name) break;
+                    address += sizeof(uint16_t);
+                }
+                mmu->write(this, address, value);
             }
         }
     }
@@ -184,6 +207,7 @@ void Process::execute_instruction(int core_id) {
                 status = "memory_violation";
                 faulting_address = address;
                 completion_time = cpu->get_current_time();
+                completion_timestamp_str = getCurrentTimestamp(true);
                 return;
             }
         }
@@ -202,6 +226,7 @@ void Process::execute_instruction(int core_id) {
             value_str.erase(value_str.find_last_not_of(" \t") + 1);
 
             uint32_t address = 0;
+.
             try {
                 address = std::stoul(address_str, nullptr, 16);
                 if (address >= static_cast<uint32_t>(memory_size)) throw std::out_of_range("Address out of bounds");
@@ -217,6 +242,7 @@ void Process::execute_instruction(int core_id) {
                 status = "memory_violation";
                 faulting_address = address;
                 completion_time = cpu->get_current_time();
+                completion_timestamp_str = getCurrentTimestamp(true);
                 return;
             }
         }
@@ -303,6 +329,7 @@ void Process::execute_instruction(int core_id) {
     if (current_instruction >= instructions.size()) {
         status = "finished";
         completion_time = cpu->get_current_time();
+        completion_timestamp_str = getCurrentTimestamp(true);
     }
 }
 

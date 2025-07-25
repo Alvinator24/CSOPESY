@@ -28,6 +28,7 @@ public:
     int get_current_time() const;
     int get_num_cores() const;
     int get_utilization() const;
+    long long get_total_busy_time() const;
     const std::vector<Core>& get_cores() const { return cores; }
     void tick();
     bool can_run_process();
